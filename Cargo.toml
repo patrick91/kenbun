@@ -1,0 +1,11 @@
+[package]
+name = "kenbun"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "kenbun"
+crate-type = ["cdylib"]
+
+[dependencies]
+pyo3 = "0.26.0"

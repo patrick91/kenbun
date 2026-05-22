@@ -1,0 +1,50 @@
+[project]
+name = "kenbun"
+requires-python = ">=3.8"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
+dynamic = ["version"]
+description = "A minimal hello-world Python extension."
+authors = [
+    {name = "Patrick Arminio", email = "patrick.arminio@gmail.com"},
+]
+dependencies = []
+readme = "README.md"
+license = {text = "MIT"}
+
+[build-system]
+requires = ["maturin>=1.9.6,<2.0"]
+build-backend = "maturin"
+
+[tool.maturin]
+features = ["pyo3/extension-module"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2.2",
+    "maturin>=1.9.6",
+    "pytest-cov",
+    "coverage",
+]
+
+[tool.coverage.run]
+branch = true
+source = ["kenbun"]
+parallel = true
+
+[tool.coverage.report]
+exclude_lines = [
+    "pragma: no cover",
+    "def __repr__",
+    "raise AssertionError",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+    "@abstractmethod",
+]
+
+[tool.coverage.html]
+directory = "htmlcov"
