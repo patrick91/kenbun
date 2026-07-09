@@ -13,9 +13,9 @@ def test_hello_returns_hello_world():
     assert kenbun.hello() == "Hello, world!"
 
 
-def test_kenbun_uses_rignore_style_extension_package():
+def test_kenbun_is_a_mixed_python_rust_package():
     kenbun = importlib.import_module("kenbun")
-    extension = importlib.import_module("kenbun.kenbun")
+    extension = importlib.import_module("kenbun._kenbun")
 
     assert kenbun.__file__ is not None
     assert kenbun.__file__.endswith("__init__.py")

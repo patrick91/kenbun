@@ -1,19 +1,24 @@
 [project]
 name = "kenbun"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Rust",
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
-dynamic = ["version"]
-description = "A minimal hello-world Python extension."
+version = "0.0.0"
+description = "Static analysis for Python projects: detect web apps, frameworks, and entrypoints without importing user code."
+keywords = ["fastapi", "static-analysis", "deployment", "detection", "uv", "workspace"]
 authors = [
     {name = "Patrick Arminio", email = "patrick.arminio@gmail.com"},
 ]
 dependencies = []
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
+
+[project.urls]
+Repository = "https://github.com/patrick91/kenbun"
+Issues = "https://github.com/patrick91/kenbun/issues"
 
 [build-system]
 requires = ["maturin>=1.9.6,<2.0"]
@@ -21,6 +26,16 @@ build-backend = "maturin"
 
 [tool.maturin]
 features = ["pyo3/extension-module"]
+python-source = "src"
+module-name = "kenbun._kenbun"
+
+[tool.autopub]
+git-username = "github-actions[bot]"
+git-email = "41898282+github-actions[bot]@users.noreply.github.com"
+plugins = [
+    "autopub.plugins.github",
+    "scripts.autopub_kenbun",
+]
 
 [dependency-groups]
 dev = [
@@ -28,7 +43,14 @@ dev = [
     "maturin>=1.9.6",
     "pytest-cov",
     "coverage",
+    "ruff>=0.12",
 ]
+
+[tool.ruff]
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "RUF"]
 
 [tool.coverage.run]
 branch = true
