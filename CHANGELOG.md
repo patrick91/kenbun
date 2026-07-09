@@ -1,6 +1,6 @@
----
-release type: minor
----
+# CHANGELOG
+
+## 0.2.0
 
 First working release of kenbun.
 
