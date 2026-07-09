@@ -6,7 +6,7 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
-version = "0.0.0"
+version = "0.1.0"
 description = "Static analysis for Python projects: detect web apps, frameworks, and entrypoints without importing user code."
 keywords = ["fastapi", "static-analysis", "deployment", "detection", "uv", "workspace"]
 authors = [
