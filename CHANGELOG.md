@@ -1,5 +1,16 @@
 # CHANGELOG
 
+## 0.2.1
+
+Release-pipeline verification and fixes (no library changes since 0.2.0).
+
+- Wheel builds no longer run autopub on every platform; the release version
+  is computed once and stamped with a tomlkit-only script, so windows-arm
+  (which has no cryptography wheel) builds cleanly.
+- Release job checks out the branch (not a detached HEAD) so the tag,
+  changelog, and GitHub release are created automatically; publish is
+  idempotent via `uv publish --check-url`.
+
 ## 0.2.0
 
 First working release of kenbun.
