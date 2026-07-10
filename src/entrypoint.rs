@@ -1,4 +1,4 @@
-//! Layer 2 — static entrypoint resolution (spec §6.3).
+//! Static Python and FastAPI entrypoint resolution.
 //!
 //! Mirrors fastapi-cli's runtime discovery exactly, because production
 //! (`fastapi run`) IS fastapi-cli: same candidate file order, same
@@ -148,7 +148,7 @@ pub fn analyze_module(source: &str) -> ModuleAnalysis {
     }
 
     // Pass B — factories: return annotation is FastAPI, or a return statement
-    // directly returns `FastAPI(...)` (spec §6.3).
+    // directly returns `FastAPI(...)`.
     let mut factories = Vec::new();
     for stmt in &module.body {
         if let Stmt::FunctionDef(func) = stmt {
@@ -192,7 +192,7 @@ pub fn analyze_module(source: &str) -> ModuleAnalysis {
                 router_usage = true;
             } else if expr_name(&call.func).is_some_and(|f| factory_set.contains(f)) {
                 // `app = create_app()` — the dominant factory idiom counts as
-                // an instance binding, is_factory=false (spec §6.3)
+                // an instance binding, is_factory=false.
                 instance_bindings.push(name.to_string());
             }
         }
@@ -312,7 +312,7 @@ fn join(dir: &str, name: &str) -> String {
     }
 }
 
-/// Resolve a project's entrypoint via rules 3 and 4 (§6.3). Rule 3 mirrors
+/// Resolve a project's entrypoint through conventional and fallback searches.
 /// production exactly: the FIRST EXISTING candidate file decides; if it has
 /// no app object, production fails there, so later files only qualify under
 /// rule 4 (medium + KB111).
@@ -347,7 +347,7 @@ pub fn resolve_project(fs: &FileSet, project_dir: &str) -> ProjectScan {
         let mut attribute = pick_attribute(&analysis.instance_bindings);
         let mut source_note = String::new();
 
-        // One-hop re-export: __init__.py exporting an app from a sibling (§6.3).
+        // One-hop re-export: __init__.py exporting an app from a sibling.
         if attribute.is_none() && rel_file.ends_with("__init__.py") {
             for (exported, source_module, source_attr) in &analysis.reexports {
                 let pkg_dir = in_project.strip_suffix("/__init__.py").unwrap_or("");
@@ -367,7 +367,7 @@ pub fn resolve_project(fs: &FileSet, project_dir: &str) -> ProjectScan {
         }
 
         if attribute.is_none() {
-            // Factory-only (§6.3): target exists, capped medium, KB112.
+            // Factory-only: target exists, capped medium, KB112.
             if let Some(factory) = analysis.factories.first() {
                 attribute = Some(factory.clone());
                 is_factory = true;
@@ -548,7 +548,7 @@ pub fn resolve_project(fs: &FileSet, project_dir: &str) -> ProjectScan {
 }
 
 /// Validate an explicit `module:attr` (rule 1 hint / rule 2 tool.fastapi).
-/// Returns Ok(resolution) or Err(diagnostics) — spec §10.
+/// Returns a validated resolution or structured diagnostics.
 pub fn validate_entrypoint(
     fs: &FileSet,
     project_dir: &str,

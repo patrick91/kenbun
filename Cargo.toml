@@ -10,7 +10,7 @@ crate-type = ["cdylib"]
 [dependencies]
 pyo3 = "0.26.0"
 # ruff crates are officially unstable ("frequent breaking changes") — exact-pin
-# all four to the SAME 0.0.x and upgrade them together (docs/spec.md §14).
+# all four to the SAME 0.0.x and upgrade them together.
 ruff_python_parser = "=0.0.3"
 ruff_python_ast = "=0.0.3"
 ruff_text_size = "=0.0.3"

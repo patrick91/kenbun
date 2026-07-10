@@ -7,8 +7,15 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
 version = "0.2.3"
-description = "Static analysis for Python projects: detect web apps, frameworks, and entrypoints without importing user code."
-keywords = ["fastapi", "static-analysis", "deployment", "detection", "uv", "workspace"]
+description = "Static application discovery for Python and modern JavaScript/TypeScript repositories."
+keywords = [
+    "static-analysis",
+    "application-detection",
+    "fastapi",
+    "javascript",
+    "typescript",
+    "monorepo",
+]
 authors = [
     {name = "Patrick Arminio", email = "patrick.arminio@gmail.com"},
 ]

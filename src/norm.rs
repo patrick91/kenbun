@@ -1,4 +1,4 @@
-//! PEP 503 name normalization and PEP 508 name extraction — spec §6.2.
+//! PEP 503 name normalization and PEP 508 name extraction.
 
 /// PEP 503: lowercase, collapse runs of `-`, `_`, `.` into a single `-`.
 pub fn normalize_name(name: &str) -> String {

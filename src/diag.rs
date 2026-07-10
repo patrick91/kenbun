@@ -1,4 +1,4 @@
-//! Diagnostic constructors — spec §5. Codes are stable; messages are presentation.
+//! Diagnostic constructors. Codes are stable; messages are presentation.
 
 use crate::model::{Diagnostic, Span};
 
@@ -25,8 +25,8 @@ pub fn new(
 pub fn kb100() -> Diagnostic {
     new(
         "KB100",
-        ERROR,
-        "no Python project found in scan root",
+        INFO,
+        "no recognizable application manifest found in scan root",
         None,
         None,
     )
@@ -37,7 +37,7 @@ pub fn kb101(path: &str, frameworks: &[String]) -> Diagnostic {
         "KB101",
         WARNING,
         format!(
-            "multiple web frameworks detected in one project: {}",
+            "multiple primary technologies detected in one application: {}",
             frameworks.join(", ")
         ),
         Some(path.to_string()),
@@ -48,8 +48,8 @@ pub fn kb101(path: &str, frameworks: &[String]) -> Diagnostic {
 pub fn kb102() -> Diagnostic {
     new(
         "KB102",
-        ERROR,
-        "Python project found, but nothing deployable",
+        INFO,
+        "project manifests found, but no supported application was detected",
         None,
         None,
     )
@@ -71,19 +71,6 @@ pub fn kb104(path: &str) -> Diagnostic {
         INFO,
         "APIRouter usage found but no FastAPI app (router-only)",
         Some(path.to_string()),
-        None,
-    )
-}
-
-pub fn kb110(paths: &[&str]) -> Diagnostic {
-    new(
-        "KB110",
-        WARNING,
-        format!(
-            "multiple deploy-target candidates not ordered by deterministic conventions: {}",
-            paths.join(", ")
-        ),
-        None,
         None,
     )
 }
@@ -114,19 +101,6 @@ pub fn kb112(path: &str, attribute: &str) -> Diagnostic {
     )
 }
 
-pub fn kb115(origin: &str) -> Diagnostic {
-    new(
-        "KB115",
-        INFO,
-        format!(
-            "scan origin `{origin}` is inside a non-deployable workspace member; deploy targets \
-             exist in sibling members"
-        ),
-        None,
-        None,
-    )
-}
-
 pub fn kb200(path: &str, message: &str, span: Span) -> Diagnostic {
     new(
         "KB200",
@@ -152,6 +126,16 @@ pub fn kb202(path: &str) -> Diagnostic {
         "KB202",
         WARNING,
         "pyproject.toml has no [project] table (and is not a workspace root)",
+        Some(path.to_string()),
+        None,
+    )
+}
+
+pub fn kb203(path: &str, message: &str) -> Diagnostic {
+    new(
+        "KB203",
+        WARNING,
+        format!("Node manifest or workspace metadata could not be parsed: {message}"),
         Some(path.to_string()),
         None,
     )
@@ -204,8 +188,21 @@ pub fn kb307(path: &str, framework: &str) -> Diagnostic {
         "KB307",
         ERROR,
         format!(
-            "no installable dependency source for this deploy target: {framework} is declared \
+            "no installable dependency source for this application: {framework} is declared \
              only in sources standard installers do not read"
+        ),
+        Some(path.to_string()),
+        None,
+    )
+}
+
+pub fn kb308(path: &str, candidates: &[String]) -> Diagnostic {
+    new(
+        "KB308",
+        WARNING,
+        format!(
+            "Node package manager is ambiguous: {}",
+            candidates.join(", ")
         ),
         Some(path.to_string()),
         None,
@@ -242,31 +239,31 @@ pub fn kb402(root: &str, pattern: &str) -> Diagnostic {
     )
 }
 
-pub fn kb500(target_dir: &str) -> Diagnostic {
+pub fn kb500(application_dir: &str) -> Diagnostic {
     new(
         "KB500",
         ERROR,
-        format!("target_dir `{target_dir}` does not exist"),
+        format!("application_dir `{application_dir}` does not exist"),
         None,
         None,
     )
 }
 
-pub fn kb501(target_dir: &str) -> Diagnostic {
+pub fn kb501(application_dir: &str) -> Diagnostic {
     new(
         "KB501",
         ERROR,
-        format!("target_dir `{target_dir}` escapes the scan root"),
+        format!("application_dir `{application_dir}` escapes the scan root"),
         None,
         None,
     )
 }
 
-pub fn kb502(target_dir: &str) -> Diagnostic {
+pub fn kb502(application_dir: &str) -> Diagnostic {
     new(
         "KB502",
         ERROR,
-        format!("target_dir `{target_dir}` contains no Python project"),
+        format!("application_dir `{application_dir}` is not a detected application"),
         None,
         None,
     )

@@ -1,4 +1,4 @@
-//! Manifest parsing — spec §6.2 (Layer 1) and §8 (dependency metadata).
+//! Static Python manifest and dependency parsing.
 
 use std::collections::BTreeMap;
 
@@ -93,7 +93,7 @@ fn declared(raw: &str, group: &str, path: &str) -> Option<DeclaredDep> {
     })
 }
 
-/// All declared deps in a parsed pyproject, with group provenance (§8).
+/// All declared dependencies in a parsed pyproject, with group provenance.
 pub fn pyproject_deps(pp: &PyProject, path: &str) -> Vec<DeclaredDep> {
     let mut out = Vec::new();
 
@@ -115,7 +115,7 @@ pub fn pyproject_deps(pp: &PyProject, path: &str) -> Vec<DeclaredDep> {
             let mut seen = std::collections::BTreeSet::new();
             while let Some(g) = stack.pop() {
                 if !seen.insert(g.clone()) {
-                    continue; // cycle guard (§6.2)
+                    continue; // Include-cycle guard.
                 }
                 let Some(toml::Value::Array(items)) = groups.get(&g) else {
                     continue;
@@ -152,7 +152,7 @@ pub fn pyproject_deps(pp: &PyProject, path: &str) -> Vec<DeclaredDep> {
         }
     }
 
-    // Poetry tables: keys are names; `python` is a version constraint (§6.2).
+    // Poetry tables: keys are names; `python` is a version constraint.
     if let Some(poetry) = pp.tool.as_ref().and_then(|t| t.poetry.as_ref()) {
         let poetry_keys = |table: &toml::Value, group: &str, out: &mut Vec<DeclaredDep>| {
             if let toml::Value::Table(t) = table {
@@ -182,7 +182,7 @@ pub fn pyproject_deps(pp: &PyProject, path: &str) -> Vec<DeclaredDep> {
     out
 }
 
-/// requirements.txt with recursive -r includes (§6.2; depth ≤ 5).
+/// requirements.txt with recursive `-r` includes, bounded to depth five.
 pub fn requirements_deps(fs: &FileSet, rel_path: &str, depth: u8, out: &mut Vec<DeclaredDep>) {
     if depth > 5 {
         return;
@@ -252,7 +252,7 @@ fn normalize_rel(path: &str) -> String {
 
 // ── lockfiles ──────────────────────────────────────────────────────────────
 
-/// uv.lock / pylock.toml resolved packages (§8): [[package]] name + version.
+/// uv.lock / pylock.toml resolved packages: `[[package]]` name and version.
 pub fn parse_lock_resolved(source: &str, lock_rel: &str, kind: &str) -> Vec<ResolvedDep> {
     let Ok(value) = source.parse::<toml::Table>() else {
         return Vec::new();
@@ -287,7 +287,7 @@ pub fn parse_lock_resolved(source: &str, lock_rel: &str, kind: &str) -> Vec<Reso
     out
 }
 
-/// Pipfile [packages]/[dev-packages]: keys are package names (§6.2).
+/// Pipfile `[packages]` and `[dev-packages]` entries.
 pub fn pipfile_deps(source: &str, path: &str) -> Vec<DeclaredDep> {
     let Ok(value) = source.parse::<toml::Table>() else {
         return Vec::new();
@@ -303,7 +303,7 @@ pub fn pipfile_deps(source: &str, path: &str) -> Vec<DeclaredDep> {
     out
 }
 
-/// setup.py string scan (§13: no execution — quoted strings only). Returns
+/// setup.py string scan (no execution; quoted strings only). Returns
 /// normalized names of known frameworks mentioned in string literals.
 pub fn setup_py_framework_mentions(source: &str) -> Vec<String> {
     let mut found = std::collections::BTreeSet::new();
@@ -368,7 +368,7 @@ pub fn project_files(fs: &FileSet, dir: &str) -> ProjectFiles {
             });
         }
     }
-    // requirements*.txt at the project root plus requirements/*.txt (§6.2)
+    // requirements*.txt at the project root plus requirements/*.txt.
     for path in fs.under(dir) {
         let rel_in_dir = if dir.is_empty() {
             path
@@ -416,7 +416,7 @@ pub fn project_files(fs: &FileSet, dir: &str) -> ProjectFiles {
     }
 }
 
-/// Framework identity specs (§6.2, §12): fastapi resolved; django/flask identity-only.
+/// Python framework identities: FastAPI resolved; Django/Flask identity-only.
 pub fn framework_for(name: &str) -> Option<&'static str> {
     match name {
         "fastapi" | "fastapi-slim" => Some("fastapi"),
