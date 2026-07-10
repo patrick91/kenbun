@@ -1,9 +1,9 @@
-//! Output model — spec §4. Field order here IS the JSON key order (§14).
+//! Public output model. Declaration order is the canonical JSON key order.
 
 use pyo3::prelude::*;
 use serde::Serialize;
 
-pub const SCHEMA_VERSION: u32 = 0;
+pub const SCHEMA_VERSION: u32 = 1;
 
 #[pyclass(get_all, frozen)]
 #[derive(Clone, Debug, Serialize)]
@@ -106,12 +106,33 @@ pub struct LockfileRef {
 
 #[pyclass(get_all, frozen)]
 #[derive(Clone, Debug, Serialize)]
-pub struct Dependencies {
-    pub package_manager: String,
+pub struct DependencySet {
+    pub ecosystem: String,
+    pub package_manager: Option<String>,
     pub manifests: Vec<ManifestRef>,
     pub lockfiles: Vec<LockfileRef>,
     pub declared: Vec<DeclaredDep>,
     pub resolved: Vec<ResolvedDep>,
+}
+
+#[pyclass(get_all, frozen)]
+#[derive(Clone, Debug, Serialize)]
+pub struct Technology {
+    pub name: String,
+    pub kind: String,
+    pub role: String,
+    pub confidence: String,
+    pub evidence: Vec<Evidence>,
+}
+
+#[pyclass(get_all, frozen)]
+#[derive(Clone, Debug, Serialize)]
+pub struct BuildScript {
+    pub name: String,
+    pub command: String,
+    pub package_manager: Option<String>,
+    pub argv: Option<Vec<String>>,
+    pub source: SourceRef,
 }
 
 #[pyclass(get_all, frozen)]
@@ -128,31 +149,40 @@ pub struct PythonInfo {
     pub version_pins: Vec<VersionPin>,
 }
 
-#[pyclass(get_all, frozen)]
-#[derive(Clone, Debug, Serialize)]
-pub struct DeployTarget {
+#[derive(Clone, Debug)]
+pub(crate) struct DeployTarget {
     pub framework: String,
-    pub form: String,
-    pub project_path: String,
     pub entrypoint: Option<Entrypoint>,
     pub confidence: String,
-    pub recommended: bool,
+    pub evidence: Vec<Evidence>,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+#[derive(Clone, Debug)]
+pub(crate) struct Project {
+    pub path: String,
+    pub name: Option<String>,
+    pub is_python_project: bool,
+    pub frameworks: Vec<String>,
+    pub deploy_targets: Vec<DeployTarget>,
+    pub dependencies: Option<DependencySet>,
     pub env_vars: Vec<EnvVar>,
+    pub python: PythonInfo,
     pub evidence: Vec<Evidence>,
     pub diagnostics: Vec<Diagnostic>,
 }
 
 #[pyclass(get_all, frozen)]
 #[derive(Clone, Debug, Serialize)]
-pub struct Project {
-    pub path: String,
+pub struct Application {
+    pub application_dir: String,
     pub name: Option<String>,
-    pub roles: Vec<String>,
-    pub frameworks: Vec<String>,
-    pub deploy_targets: Vec<DeployTarget>,
-    pub dependencies: Option<Dependencies>,
+    pub technologies: Vec<Technology>,
+    pub entrypoint: Option<Entrypoint>,
+    pub dependencies: Vec<DependencySet>,
+    pub build_scripts: Vec<BuildScript>,
     pub env_vars: Vec<EnvVar>,
-    pub python: PythonInfo,
+    pub python: Option<PythonInfo>,
     pub evidence: Vec<Evidence>,
     pub diagnostics: Vec<Diagnostic>,
 }
@@ -168,81 +198,28 @@ pub struct Workspace {
 
 #[pyclass(get_all, frozen)]
 #[derive(Clone, Debug, Serialize)]
-pub struct WantFile {
-    pub path: String,
-    pub reason: String,
-    pub priority: u32,
-    pub max_bytes: u64,
-    pub blob_sha: Option<String>,
-}
-
-#[pyclass(get_all, frozen)]
-#[derive(Clone, Debug, Serialize)]
-pub struct ClassificationPrimary {
-    pub path: String,
-    pub evidence: String,
-}
-
-#[pyclass(get_all, frozen)]
-#[derive(Clone, Debug, Serialize)]
-pub struct Classification {
-    pub python: String,
-    pub uses_fastapi: String,
-    pub primary: Option<ClassificationPrimary>,
-}
-
-#[pyclass(get_all, frozen)]
-#[derive(Clone, Debug, Serialize)]
-pub struct InputInfo {
-    pub mode: String,
-    pub files_seen: u64,
-    pub complete: bool,
-}
-
-#[pyclass(get_all, frozen)]
-#[derive(Clone, Debug, Serialize)]
 pub struct ScanResult {
     pub schema_version: u32,
     pub root: String,
     pub upload_root: String,
     pub scan_origin: String,
-    pub status: String,
-    pub want_files: Vec<WantFile>,
-    pub input: InputInfo,
     pub workspace: Option<Workspace>,
-    pub projects: Vec<Project>,
-    pub deploy_targets: Vec<DeployTarget>,
-    pub classification: Classification,
+    pub applications: Vec<Application>,
     pub diagnostics: Vec<Diagnostic>,
 }
 
 #[pymethods]
 impl ScanResult {
-    /// Canonical JSON (§14): UTF-8, struct-declaration key order, compact.
+    /// Canonical JSON: UTF-8, struct-declaration key order, compact.
     fn to_json(&self) -> String {
         serde_json::to_string(self).expect("model serialization is infallible")
     }
 
     fn __repr__(&self) -> String {
         format!(
-            "ScanResult(projects={}, deploy_targets={}, diagnostics={})",
-            self.projects.len(),
-            self.deploy_targets.len(),
+            "ScanResult(applications={}, diagnostics={})",
+            self.applications.len(),
             self.diagnostics.len()
-        )
-    }
-}
-
-#[pymethods]
-impl DeployTarget {
-    fn __repr__(&self) -> String {
-        format!(
-            "DeployTarget(framework={:?}, project_path={:?}, entrypoint={:?}, confidence={:?}, recommended={})",
-            self.framework,
-            self.project_path,
-            self.entrypoint.as_ref().map(|e| e.as_string.clone()),
-            self.confidence,
-            self.recommended
         )
     }
 }

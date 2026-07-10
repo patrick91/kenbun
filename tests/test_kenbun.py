@@ -4,13 +4,13 @@ import importlib.machinery
 import pytest
 
 
-def test_hello_returns_hello_world():
+def test_kenbun_is_importable():
     try:
         kenbun = importlib.import_module("kenbun")
     except ModuleNotFoundError:
         pytest.fail("kenbun should be importable")
 
-    assert kenbun.hello() == "Hello, world!"
+    assert callable(kenbun.scan)
 
 
 def test_kenbun_is_a_mixed_python_rust_package():
@@ -24,4 +24,5 @@ def test_kenbun_is_a_mixed_python_rust_package():
         extension.__file__.endswith(suffix)
         for suffix in importlib.machinery.EXTENSION_SUFFIXES
     )
-    assert kenbun.hello is extension.hello
+    assert kenbun.scan is extension.scan
+    assert kenbun.Application is extension.Application

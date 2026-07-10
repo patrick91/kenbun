@@ -1,4 +1,4 @@
-//! Scan orchestration — spec §4.1 (confidence), §6 (detection), §6.5 (ranking), §14 (determinism).
+//! Deterministic filesystem scan orchestration and application assembly.
 
 use std::collections::BTreeSet;
 use std::path::Path;
@@ -8,10 +8,11 @@ use crate::entrypoint::{self, Resolution};
 use crate::fileset::{self, FileSet};
 use crate::manifest::{self, PyProject};
 use crate::model::*;
+use crate::node::{self, RawNodeDiscovery, RawNodePackage, RawTechnologySignal};
 use crate::workspace;
 
 pub struct ScanOptions {
-    pub target_dir: Option<String>,
+    pub application_dir: Option<String>,
     pub entrypoint: Option<String>,
     pub max_files: Option<u64>,
     pub follow_symlinks: bool,
@@ -30,6 +31,20 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
     if fs.truncated {
         scan_diags.push(diag::kb802(opts.max_files.unwrap_or(0)));
     }
+    let node_discovery = node::discover(&fs);
+    scan_diags.extend(
+        node_discovery
+            .parse_errors
+            .iter()
+            .map(|error| diag::kb203(&error.path, &error.message)),
+    );
+    scan_diags.extend(
+        node_discovery
+            .packages
+            .iter()
+            .filter(|package| package.package_manager_candidates.len() > 1)
+            .map(|package| diag::kb308(&package.path, &package.package_manager_candidates)),
+    );
 
     // ── workspace at the effective root ────────────────────────────────
     let root_pyproject = fs.read_str("pyproject.toml");
@@ -48,8 +63,44 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
         scan_diags.extend(info.diagnostics.clone());
         ws_info = Some(info.workspace);
     }
+    if let Some(node_workspace) = node_discovery
+        .workspaces
+        .iter()
+        .find(|workspace| workspace.path == ".")
+    {
+        for pattern in &node_workspace.unmatched_patterns {
+            scan_diags.push(diag::kb402(".", pattern));
+        }
+        if node_workspace.package_manager_candidates.len() > 1 {
+            scan_diags.push(diag::kb308(".", &node_workspace.package_manager_candidates));
+        }
+        let mut node_members = node_workspace.members.clone();
+        if let Some(workspace) = &mut ws_info {
+            workspace.kind = "mixed".to_string();
+            workspace.members.append(&mut node_members);
+            workspace
+                .members
+                .sort_by(|a, b| (a != ".").cmp(&(b != ".")).then(a.cmp(b)));
+            workspace.members.dedup();
+        } else {
+            let mut members = vec![".".to_string()];
+            members.append(&mut node_members);
+            members.sort_by(|a, b| (a != ".").cmp(&(b != ".")).then(a.cmp(b)));
+            members.dedup();
+            ws_info = Some(Workspace {
+                kind: node_workspace
+                    .package_manager
+                    .as_ref()
+                    .map(|manager| manager.name.clone())
+                    .unwrap_or_else(|| "node".to_string()),
+                path: ".".to_string(),
+                virtual_root: true,
+                members,
+            });
+        }
+    }
 
-    // ── project discovery (§6.2) ───────────────────────────────────────
+    // ── Python project discovery ───────────────────────────────────────
     let pyproject_dirs = fs.dirs_with("pyproject.toml");
     let mut project_dirs: BTreeSet<String> = pyproject_dirs.iter().cloned().collect();
     // requirements/Pipfile/setup.py projects: not nested under a pyproject project
@@ -68,11 +119,11 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
         project_dirs.insert(String::new());
     }
 
-    // ── hint validation: target_dir (§10) ──────────────────────────────
+    // ── hint validation: application_dir ──────────────────────────────
     let mut hint_dir: Option<String> = None;
-    if let Some(raw) = &opts.target_dir {
+    if let Some(raw) = &opts.application_dir {
         let normalized = normalize_rel(raw);
-        if normalized.starts_with("..") {
+        if is_absolute_like(raw) || normalized.starts_with("..") {
             scan_diags.push(diag::kb501(raw));
         } else {
             let as_project = if normalized == "." {
@@ -86,8 +137,6 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
                 .any(|f| as_project.is_empty() || f.starts_with(&format!("{as_project}/")));
             if !exists {
                 scan_diags.push(diag::kb500(raw));
-            } else if !project_dirs.contains(&as_project) {
-                scan_diags.push(diag::kb502(raw));
             } else {
                 hint_dir = Some(as_project);
             }
@@ -108,139 +157,32 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
         projects.push(analyze_project(&fs, dir, workspace_lock, hint_entry));
     }
 
-    // ── flatten + rank targets (§6.5) ──────────────────────────────────
-    let mut targets: Vec<DeployTarget> = projects
-        .iter()
-        .flat_map(|p| p.deploy_targets.iter().cloned())
-        .collect();
-    let origin = hint_dir.clone().unwrap_or_else(|| {
-        if effective.scan_origin == "." {
-            String::new()
-        } else {
-            effective.scan_origin.clone()
-        }
-    });
-    let roles_map: std::collections::BTreeMap<String, Vec<String>> = projects
-        .iter()
-        .map(|p| (p.path.clone(), p.roles.clone()))
-        .collect();
-    let roles_of = |pp: &str| roles_map.get(pp).cloned().unwrap_or_default();
-    targets.sort_by_key(|t| {
-        let affinity = origin_matches(
-            &(if origin.is_empty() {
-                ".".to_string()
-            } else {
-                origin.clone()
-            }),
-            &(if t.project_path == "." {
-                String::new()
-            } else {
-                t.project_path.clone()
-            }),
-        );
-        let example = roles_of(&t.project_path)
+    let mut applications = python_applications(&projects);
+    merge_node_applications(&mut applications, &node_discovery);
+    applications.retain(|application| {
+        application
+            .technologies
             .iter()
-            .any(|r| r == "example" || r == "test-support");
-        (
-            !affinity,                           // affinity first (§6.5.1)
-            example,                             // non-example first (§6.5.2)
-            t.form != "project",                 // project form first (§6.5.3)
-            confidence_rank(&t.confidence),      // high first (§6.5.4)
-            t.project_path.matches('/').count(), // shallower first (§6.5.5)
-            t.project_path.clone(),              // byte order (§6.5.6-7)
-        )
+            .any(|technology| technology.role == "primary")
     });
-    if let Some(first) = targets.first_mut() {
-        first.recommended = true;
-    }
-    // mirror recommended back into the nested copies
-    for project in &mut projects {
-        for target in &mut project.deploy_targets {
-            target.recommended = targets.first().is_some_and(|t| {
-                t.project_path == target.project_path && t.framework == target.framework
-            });
-        }
-    }
-
-    // ── top-level ambiguity / origin diagnostics (§6.3, §6.5) ──────────
-    let non_example: Vec<&DeployTarget> = targets
-        .iter()
-        .filter(|t| {
-            !roles_of(&t.project_path)
-                .iter()
-                .any(|r| r == "example" || r == "test-support")
-        })
-        .collect();
-    let origin_affine = targets.iter().any(|t| {
-        origin_matches(
-            &(if origin.is_empty() {
-                ".".to_string()
-            } else {
-                origin.clone()
-            }),
-            &(if t.project_path == "." {
-                String::new()
-            } else {
-                t.project_path.clone()
-            }),
-        )
-    });
-    if non_example.len() >= 2
-        && confidence_rank(&non_example[0].confidence)
-            == confidence_rank(&non_example[1].confidence)
-        && !origin_affine
-    {
-        let paths: Vec<&str> = non_example
+    if let Some(workspace) = &mut ws_info {
+        workspace.virtual_root = !applications
             .iter()
-            .take(4)
-            .map(|t| t.project_path.as_str())
-            .collect();
-        scan_diags.push(diag::kb110(&paths));
+            .any(|application| application.application_dir == ".");
     }
-    if !origin.is_empty() && !origin_affine && !targets.is_empty() {
-        scan_diags.push(diag::kb115(&origin));
-    }
-
-    // ── outcome codes (§6.4) ───────────────────────────────────────────
-    let python_seen = !projects.is_empty() || fs.files.keys().any(|f| f.ends_with(".py"));
-    if projects.is_empty() {
-        scan_diags.push(diag::kb100());
-    } else if targets.is_empty() {
-        scan_diags.push(diag::kb102());
-    }
-
-    // ── classification (§11) ───────────────────────────────────────────
-    let declared_fastapi = projects
-        .iter()
-        .any(|p| p.frameworks.iter().any(|f| f == "fastapi"));
-    // weak signals: convention-only targets, or setup.py string-scan mentions
-    let likely = targets.iter().any(|t| t.framework == "fastapi")
-        || projects.iter().any(|p| {
-            p.evidence
-                .iter()
-                .any(|e| e.detail.contains("setup.py mentions fastapi"))
-        });
-    let classification = Classification {
-        python: if python_seen { "yes" } else { "no" }.to_string(),
-        uses_fastapi: if declared_fastapi {
-            "yes"
-        } else if likely {
-            "likely"
-        } else {
-            "no"
+    if let Some(hint) = &hint_dir {
+        let display = if hint.is_empty() { "." } else { hint };
+        if !applications
+            .iter()
+            .any(|application| application.application_dir == display)
+        {
+            scan_diags.push(diag::kb502(
+                opts.application_dir.as_deref().unwrap_or(display),
+            ));
         }
-        .to_string(),
-        primary: targets.first().map(|t| ClassificationPrimary {
-            path: t.project_path.clone(),
-            evidence: t
-                .evidence
-                .first()
-                .map(|e| format!("{}: {}", e.kind, e.detail))
-                .unwrap_or_default(),
-        }),
-    };
+    }
 
-    // ── aggregate + order deterministically (§14) ──────────────────────
+    // ── aggregate + order deterministically ────────────────────────────
     let mut all_diags = scan_diags;
     for project in &projects {
         all_diags.extend(project.diagnostics.iter().cloned());
@@ -248,29 +190,403 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
             all_diags.extend(target.diagnostics.iter().cloned());
         }
     }
+    for application in &applications {
+        all_diags.extend(application.diagnostics.iter().cloned());
+    }
     dedup_sort_diags(&mut all_diags);
 
-    let files_seen = fs.files.len() as u64;
-    projects.sort_by(|a, b| a.path.cmp(&b.path));
+    applications.sort_by(|a, b| a.application_dir.cmp(&b.application_dir));
+
+    if applications.is_empty() {
+        all_diags.push(
+            if projects.is_empty() && node_discovery.packages.is_empty() {
+                diag::kb100()
+            } else {
+                diag::kb102()
+            },
+        );
+        dedup_sort_diags(&mut all_diags);
+    }
 
     ScanResult {
         schema_version: SCHEMA_VERSION,
         root: root.to_string_lossy().to_string(),
         upload_root: effective.upload_root,
         scan_origin: effective.scan_origin,
-        status: "complete".to_string(),
-        want_files: Vec::new(),
-        input: InputInfo {
-            mode: "fs".to_string(),
-            files_seen,
-            complete: !fs.truncated,
-        },
         workspace: ws_info,
-        projects,
-        deploy_targets: targets,
-        classification,
+        applications,
         diagnostics: all_diags,
     }
+}
+
+fn python_applications(projects: &[Project]) -> Vec<Application> {
+    projects
+        .iter()
+        .filter(|project| project.is_python_project)
+        .map(|project| {
+            let mut technologies = vec![Technology {
+                name: "python".to_string(),
+                kind: "language".to_string(),
+                role: "supporting".to_string(),
+                confidence: "high".to_string(),
+                evidence: project.evidence.clone(),
+            }];
+            let mut frameworks = project.frameworks.clone();
+            frameworks.extend(
+                project
+                    .deploy_targets
+                    .iter()
+                    .map(|target| target.framework.clone()),
+            );
+            frameworks.sort();
+            frameworks.dedup();
+            for framework in &frameworks {
+                let target = project
+                    .deploy_targets
+                    .iter()
+                    .find(|target| &target.framework == framework);
+                technologies.push(Technology {
+                    name: framework.clone(),
+                    kind: "framework".to_string(),
+                    role: "primary".to_string(),
+                    confidence: target
+                        .map(|target| target.confidence.clone())
+                        .unwrap_or_else(|| "high".to_string()),
+                    evidence: target
+                        .map(|target| target.evidence.clone())
+                        .unwrap_or_else(|| project.evidence.clone()),
+                });
+            }
+            technologies
+                .sort_by(|a, b| (&a.role, &a.kind, &a.name).cmp(&(&b.role, &b.kind, &b.name)));
+
+            let entrypoint = project
+                .deploy_targets
+                .iter()
+                .find_map(|target| target.entrypoint.clone());
+            let mut diagnostics = project.diagnostics.clone();
+            for target in &project.deploy_targets {
+                diagnostics.extend(target.diagnostics.clone());
+            }
+            dedup_sort_diags(&mut diagnostics);
+
+            Application {
+                application_dir: project.path.clone(),
+                name: project.name.clone(),
+                technologies,
+                entrypoint,
+                dependencies: project.dependencies.clone().into_iter().collect(),
+                build_scripts: Vec::new(),
+                env_vars: project.env_vars.clone(),
+                python: Some(project.python.clone()),
+                evidence: project.evidence.clone(),
+                diagnostics,
+            }
+        })
+        .collect()
+}
+
+fn merge_node_applications(applications: &mut Vec<Application>, discovery: &RawNodeDiscovery) {
+    for package in &discovery.packages {
+        let framework_signals: Vec<&RawTechnologySignal> = package
+            .technologies
+            .iter()
+            .filter(|technology| technology.kind == "framework")
+            .collect();
+        let existing = applications
+            .iter()
+            .position(|application| application.application_dir == package.path);
+        if existing.is_none() && framework_signals.is_empty() && !package.vite.standalone {
+            continue;
+        }
+
+        let index = existing.unwrap_or_else(|| {
+            applications.push(Application {
+                application_dir: package.path.clone(),
+                name: package.name.clone(),
+                technologies: Vec::new(),
+                entrypoint: None,
+                dependencies: Vec::new(),
+                build_scripts: Vec::new(),
+                env_vars: Vec::new(),
+                python: None,
+                evidence: Vec::new(),
+                diagnostics: Vec::new(),
+            });
+            applications.len() - 1
+        });
+        let application = &mut applications[index];
+        let had_primary = application
+            .technologies
+            .iter()
+            .any(|technology| technology.role == "primary");
+        if application.name.is_none()
+            || (!had_primary && (!framework_signals.is_empty() || package.vite.standalone))
+        {
+            if let Some(name) = &package.name {
+                application.name = Some(name.clone());
+            }
+        }
+        for signal in &package.technologies {
+            if signal.id == "inertia" {
+                continue;
+            }
+            let name = match signal.id.as_str() {
+                "solid-js" => "solid",
+                other => other,
+            };
+            let kind = match signal.kind.as_str() {
+                "ui" => "ui-framework",
+                other => other,
+            };
+            let role = if signal.kind == "framework"
+                || (signal.id == "vite"
+                    && package.vite.standalone
+                    && framework_signals.is_empty()
+                    && !had_primary)
+            {
+                "primary"
+            } else {
+                "supporting"
+            };
+            merge_technology(
+                &mut application.technologies,
+                Technology {
+                    name: name.to_string(),
+                    kind: kind.to_string(),
+                    role: role.to_string(),
+                    confidence: "high".to_string(),
+                    evidence: node_signal_evidence(package, signal),
+                },
+            );
+        }
+
+        if has_declared_dependency(application, "python", "cross-inertia")
+            && package.inertia.corroborated
+        {
+            let mut evidence = package
+                .technologies
+                .iter()
+                .find(|technology| technology.id == "inertia")
+                .map(|technology| node_signal_evidence(package, technology))
+                .unwrap_or_default();
+            evidence.extend(
+                application
+                    .dependencies
+                    .iter()
+                    .filter(|dependencies| dependencies.ecosystem == "python")
+                    .flat_map(|dependencies| &dependencies.declared)
+                    .filter(|dependency| dependency.name == "cross-inertia")
+                    .map(|dependency| Evidence {
+                        kind: "dependency-declared".to_string(),
+                        path: dependency.source.path.clone(),
+                        span: dependency.source.span.clone(),
+                        detail: format!("{} in `{}`", dependency.raw, dependency.group),
+                    }),
+            );
+            merge_technology(
+                &mut application.technologies,
+                Technology {
+                    name: "cross-inertia".to_string(),
+                    kind: "integration".to_string(),
+                    role: "supporting".to_string(),
+                    confidence: "high".to_string(),
+                    evidence,
+                },
+            );
+        }
+
+        application.dependencies.push(node_dependency_set(package));
+        if let Some(command) = package.scripts.get("build") {
+            application.build_scripts.push(BuildScript {
+                name: "build".to_string(),
+                command: command.clone(),
+                package_manager: package
+                    .package_manager
+                    .as_ref()
+                    .map(|manager| manager.name.clone()),
+                argv: safe_argv(command),
+                source: SourceRef {
+                    path: package.manifest_path.clone(),
+                    span: None,
+                },
+            });
+        }
+        if package.package_manager_candidates.len() > 1 {
+            application.diagnostics.push(diag::kb308(
+                &package.path,
+                &package.package_manager_candidates,
+            ));
+        }
+
+        application
+            .technologies
+            .sort_by(|a, b| (&a.role, &a.kind, &a.name).cmp(&(&b.role, &b.kind, &b.name)));
+        application.dependencies.sort_by(|a, b| {
+            (&a.ecosystem, &a.package_manager).cmp(&(&b.ecosystem, &b.package_manager))
+        });
+        application
+            .build_scripts
+            .sort_by(|a, b| a.name.cmp(&b.name));
+        application.evidence = application
+            .technologies
+            .iter()
+            .flat_map(|technology| technology.evidence.clone())
+            .collect();
+        application
+            .evidence
+            .sort_by(|a, b| (&a.path, &a.kind, &a.detail).cmp(&(&b.path, &b.kind, &b.detail)));
+        application
+            .evidence
+            .dedup_by(|a, b| a.kind == b.kind && a.path == b.path && a.detail == b.detail);
+
+        let primary: Vec<String> = application
+            .technologies
+            .iter()
+            .filter(|technology| technology.role == "primary")
+            .map(|technology| technology.name.clone())
+            .collect();
+        if primary.len() > 1 {
+            application
+                .diagnostics
+                .push(diag::kb101(&application.application_dir, &primary));
+        }
+        dedup_sort_diags(&mut application.diagnostics);
+    }
+}
+
+fn merge_technology(technologies: &mut Vec<Technology>, incoming: Technology) {
+    if let Some(existing) = technologies
+        .iter_mut()
+        .find(|technology| technology.name == incoming.name && technology.kind == incoming.kind)
+    {
+        if incoming.role == "primary" {
+            existing.role = "primary".to_string();
+        }
+        existing.evidence.extend(incoming.evidence);
+        existing
+            .evidence
+            .sort_by(|a, b| (&a.path, &a.kind, &a.detail).cmp(&(&b.path, &b.kind, &b.detail)));
+        existing
+            .evidence
+            .dedup_by(|a, b| a.kind == b.kind && a.path == b.path && a.detail == b.detail);
+    } else {
+        technologies.push(incoming);
+    }
+}
+
+fn node_signal_evidence(package: &RawNodePackage, signal: &RawTechnologySignal) -> Vec<Evidence> {
+    signal
+        .evidence
+        .iter()
+        .map(|detail| {
+            let (kind, path) = if let Some(path) = detail.strip_prefix("config:") {
+                ("marker-file", path.to_string())
+            } else if let Some(path) = detail.strip_prefix("marker:") {
+                ("marker-file", path.to_string())
+            } else if detail.starts_with("script:") {
+                ("build-script", package.manifest_path.clone())
+            } else if detail.contains("Dependencies:")
+                || detail.starts_with("dependencies:")
+                || detail.starts_with("dependency:")
+            {
+                ("dependency-declared", package.manifest_path.clone())
+            } else if detail.contains('/') || detail.contains('.') {
+                ("marker-file", detail.to_string())
+            } else {
+                ("marker-file", package.manifest_path.clone())
+            };
+            Evidence {
+                kind: kind.to_string(),
+                path,
+                span: None,
+                detail: detail.clone(),
+            }
+        })
+        .collect()
+}
+
+fn node_dependency_set(package: &RawNodePackage) -> DependencySet {
+    let mut declared = Vec::new();
+    for (group, dependencies) in [
+        ("dependencies", &package.dependencies),
+        ("devDependencies", &package.dev_dependencies),
+        ("optionalDependencies", &package.optional_dependencies),
+    ] {
+        for (name, specifier) in dependencies {
+            declared.push(DeclaredDep {
+                name: name.clone(),
+                raw: format!("{name}@{specifier}"),
+                specifier: specifier.clone(),
+                extras: Vec::new(),
+                markers: None,
+                group: group.to_string(),
+                source: SourceRef {
+                    path: package.manifest_path.clone(),
+                    span: None,
+                },
+            });
+        }
+    }
+    declared.sort_by(|a, b| (&a.group, &a.name).cmp(&(&b.group, &b.name)));
+
+    DependencySet {
+        ecosystem: "node".to_string(),
+        package_manager: package
+            .package_manager
+            .as_ref()
+            .map(|manager| manager.name.clone()),
+        manifests: vec![ManifestRef {
+            path: package.manifest_path.clone(),
+            kind: "package-json".to_string(),
+        }],
+        lockfiles: package
+            .lockfiles
+            .iter()
+            .map(|path| LockfileRef {
+                path: path.clone(),
+                kind: node_lockfile_kind(path).to_string(),
+                parsed: false,
+            })
+            .collect(),
+        declared,
+        resolved: Vec::new(),
+    }
+}
+
+fn node_lockfile_kind(path: &str) -> &'static str {
+    match path.rsplit('/').next().unwrap_or(path) {
+        "package-lock.json" | "npm-shrinkwrap.json" => "npm",
+        "pnpm-lock.yaml" => "pnpm",
+        "yarn.lock" => "yarn",
+        "bun.lock" | "bun.lockb" => "bun",
+        _ => "node",
+    }
+}
+
+fn has_declared_dependency(application: &Application, ecosystem: &str, name: &str) -> bool {
+    application.dependencies.iter().any(|dependencies| {
+        dependencies.ecosystem == ecosystem
+            && dependencies
+                .declared
+                .iter()
+                .any(|dependency| dependency.name == name)
+    })
+}
+
+fn safe_argv(command: &str) -> Option<Vec<String>> {
+    if command.is_empty()
+        || command
+            .chars()
+            .any(|character| "|&;<>()$`\\\n\r\"'".contains(character))
+    {
+        return None;
+    }
+    let argv: Vec<String> = command
+        .split_whitespace()
+        .map(ToString::to_string)
+        .collect();
+    (!argv.is_empty()).then_some(argv)
 }
 
 // ── per-project ────────────────────────────────────────────────────────────
@@ -309,7 +625,7 @@ fn analyze_project(
         }
     }
 
-    // declared dependencies (§8)
+    // Declared Python dependencies.
     let mut declared: Vec<DeclaredDep> = Vec::new();
     if let (Some(pp), Some(pp_path)) = (&parsed, &files.pyproject) {
         declared.extend(manifest::pyproject_deps(pp, pp_path));
@@ -329,7 +645,7 @@ fn analyze_project(
     }
     declared.sort_by(|a, b| (&a.name, &a.source.path).cmp(&(&b.name, &b.source.path)));
 
-    // resolved from lockfiles (§8)
+    // Resolved Python dependencies from supported lockfiles.
     let mut resolved: Vec<ResolvedDep> = Vec::new();
     for lock in &files.lockfiles {
         if lock.parsed {
@@ -377,7 +693,7 @@ fn analyze_project(
         diagnostics.push(diag::kb306(&display_path, package_manager));
     }
 
-    // frameworks (Layer 1, §6.2) with group provenance
+    // Framework identity from dependencies, with group provenance.
     let mut frameworks: Vec<String> = Vec::new();
     let mut fastapi_groups: Vec<String> = Vec::new();
     for dep in &declared {
@@ -396,7 +712,7 @@ fn analyze_project(
             }
         }
     }
-    // django marker file (§12 identity-only)
+    // Django marker-file identity.
     let manage = if dir.is_empty() {
         "manage.py".to_string()
     } else {
@@ -438,7 +754,7 @@ fn analyze_project(
         diagnostics.push(diag::kb101(&display_path, &frameworks));
     }
 
-    // evident-install-path rule (§6.2): which fastapi declarations install?
+    // Evident-install-path rule: which FastAPI declarations install?
     let has_lock = workspace_lock || files.lockfiles.iter().any(|l| l.kind == "uv");
     let installable = |group: &str| -> bool {
         if has_lock {
@@ -460,7 +776,7 @@ fn analyze_project(
         diagnostics.push(diag::kb307(&display_path, "fastapi"));
     }
 
-    // python version facts (§8) + KB700
+    // Python version facts and KB700 conflicts.
     let requires_python = parsed
         .as_ref()
         .and_then(|pp| pp.project.as_ref())
@@ -497,7 +813,7 @@ fn analyze_project(
         }
     }
 
-    // ── Layer 2 (§6.3) ──────────────────────────────────────────────────
+    // ── FastAPI entrypoint resolution ──────────────────────────────────
     let tool_entrypoint = parsed
         .as_ref()
         .and_then(|pp| pp.tool.as_ref())
@@ -530,7 +846,7 @@ fn analyze_project(
         resolution = scan.resolution;
     }
 
-    // ── target construction + confidence (§4.1) ────────────────────────
+    // ── Internal FastAPI target construction and confidence ───────────
     let mut deploy_targets = Vec::new();
     if let Some(res) = resolution {
         let mut caps = 0;
@@ -544,7 +860,7 @@ fn analyze_project(
             caps += 1;
         }
         let confidence = if !fastapi_declared {
-            "low" // convention-only (§4.1)
+            "low" // convention-only
         } else if caps == 0 {
             "high"
         } else if caps == 1 {
@@ -559,8 +875,6 @@ fn analyze_project(
         };
         deploy_targets.push(DeployTarget {
             framework: "fastapi".to_string(),
-            form: "project".to_string(),
-            project_path: display_path.clone(),
             entrypoint: Some(Entrypoint {
                 kind: "asgi".to_string(),
                 module: res.module.clone(),
@@ -571,22 +885,16 @@ fn analyze_project(
                 as_string: format!("{}:{}", res.module, res.attribute),
             }),
             confidence: confidence.to_string(),
-            recommended: false,
-            env_vars: Vec::new(),
             evidence: res.evidence,
             diagnostics: res.diagnostics,
         });
     } else if fastapi_declared {
-        // KB103: framework declared, no app object — placeholder target (§6.4)
+        // KB103: framework declared, but no app object was resolved.
         let kb103 = diag::kb103(&display_path, "fastapi");
         deploy_targets.push(DeployTarget {
             framework: "fastapi".to_string(),
-            form: "project".to_string(),
-            project_path: display_path.clone(),
             entrypoint: None,
             confidence: if dep_cap { "low" } else { "medium" }.to_string(),
-            recommended: false,
-            env_vars: Vec::new(),
             evidence: Vec::new(),
             diagnostics: vec![kb103],
         });
@@ -597,15 +905,6 @@ fn analyze_project(
         diagnostics.push(diag::kb104(&display_path));
     }
     let _ = import_seen;
-
-    // roles (§6.1)
-    let mut roles = fileset::path_roles(dir);
-    let is_webapp = !deploy_targets.is_empty();
-    if is_webapp {
-        roles.insert(0, "webapp".to_string());
-    } else if files.pyproject.is_some() || !files.requirements.is_empty() {
-        roles.insert(0, "library".to_string());
-    }
 
     let name = parsed
         .as_ref()
@@ -627,11 +926,15 @@ fn analyze_project(
     Project {
         path: display_path,
         name,
-        roles,
+        is_python_project: !is_ws_root
+            || parsed
+                .as_ref()
+                .is_some_and(|project| project.project.is_some()),
         frameworks,
         deploy_targets,
-        dependencies: Some(Dependencies {
-            package_manager: package_manager.to_string(),
+        dependencies: Some(DependencySet {
+            ecosystem: "python".to_string(),
+            package_manager: (package_manager != "unknown").then(|| package_manager.to_string()),
             manifests: files.manifests,
             lockfiles: files.lockfiles,
             declared,
@@ -671,15 +974,7 @@ fn detect_package_manager(
     }
 }
 
-fn confidence_rank(confidence: &str) -> u8 {
-    match confidence {
-        "high" => 0,
-        "medium" => 1,
-        _ => 2,
-    }
-}
-
-/// origin is inside (or equal to) the project dir — §6.5 affinity.
+/// Whether the scan origin is inside (or equal to) the project directory.
 /// `origin` uses "." for root; `project_dir` is "" for root.
 fn origin_matches(origin: &str, project_dir: &str) -> bool {
     let origin = if origin == "." { "" } else { origin };
@@ -715,7 +1010,17 @@ fn normalize_rel(path: &str) -> String {
     }
 }
 
-/// §14: dedup by (code, path, span-start), order by (path, span-start, code).
+fn is_absolute_like(path: &str) -> bool {
+    let normalized = path.replace('\\', "/");
+    normalized.starts_with('/')
+        || normalized.as_bytes().get(1) == Some(&b':')
+            && normalized
+                .as_bytes()
+                .get(2)
+                .is_some_and(|separator| *separator == b'/')
+}
+
+/// Dedup by (code, path, span-start), ordered by (path, span-start, code).
 fn dedup_sort_diags(diags: &mut Vec<Diagnostic>) {
     diags.sort_by(|a, b| {
         let key = |d: &Diagnostic| {

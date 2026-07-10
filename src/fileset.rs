@@ -1,14 +1,9 @@
-//! File access abstraction — spec §2 (sans-IO core) and §6.1 (exclusions).
-//!
-//! The engine only sees a `FileSet`: a sorted map of `/`-separated relative
-//! paths plus on-demand reads. The fs frontend below fills it by walking a
-//! real directory; the virtual frontend (analyze(), M2) will fill it from
-//! caller-provided maps.
+//! Deterministic filesystem indexing and bounded file reads.
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-/// Per-file parse cap (spec §14): larger files are skipped as unavailable.
+/// Per-file parse cap: larger files are skipped as unavailable.
 pub const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
 const UNCONDITIONAL_EXCLUDES: &[&str] = &[
@@ -28,23 +23,15 @@ const UNCONDITIONAL_EXCLUDES: &[&str] = &[
 ];
 
 /// `env`/`build`/`dist` are only excluded when they look like venvs or
-/// build output (spec §6.1) — real source dirs may use these names.
+/// build output; real source directories may use these names.
 const CONDITIONAL_EXCLUDES: &[&str] = &["env", "build", "dist"];
 const VENV_BUILD_MARKERS: &[&str] = &["pyvenv.cfg", "bin/activate", "PKG-INFO"];
 
 pub struct FileSet {
     pub root: PathBuf,
-    /// relative `/`-separated path -> size in bytes; BTreeMap = byte order (§14)
+    /// Relative `/`-separated path to size; BTreeMap preserves byte ordering.
     pub files: BTreeMap<String, u64>,
     pub truncated: bool,
-    pub mode: Mode,
-}
-
-#[derive(PartialEq, Eq, Clone, Copy)]
-pub enum Mode {
-    Fs,
-    #[allow(dead_code)] // M2: analyze() virtual frontend
-    Virtual,
 }
 
 impl FileSet {
@@ -84,16 +71,11 @@ impl FileSet {
     }
 
     pub fn read(&self, rel: &str) -> Option<Vec<u8>> {
-        match self.mode {
-            Mode::Fs => {
-                let size = *self.files.get(rel)?;
-                if size > MAX_FILE_BYTES {
-                    return None;
-                }
-                std::fs::read(self.root.join(rel)).ok()
-            }
-            Mode::Virtual => None, // M2: backed by the caller's contents map
+        let size = *self.files.get(rel)?;
+        if size > MAX_FILE_BYTES {
+            return None;
         }
+        std::fs::read(self.root.join(rel)).ok()
     }
 
     pub fn read_str(&self, rel: &str) -> Option<String> {
@@ -116,8 +98,8 @@ fn is_excluded_dir(path: &Path) -> bool {
 
 /// Walk `root`, honoring .gitignore plus any `extra_ignore_files` (e.g.
 /// `.fastapicloudignore` — same syntax as .gitignore, any depth, higher
-/// precedence), applying spec §6.1 exclusions. Serial, byte-ordered (§14)
-/// so `max_files` truncation is reproducible.
+/// precedence), applying built-in exclusions. Serial and byte-ordered so
+/// `max_files` truncation is reproducible.
 pub fn walk_fs(
     root: &Path,
     max_files: Option<u64>,
@@ -133,6 +115,7 @@ pub fn walk_fs(
         .git_ignore(true)
         .git_global(false)
         .git_exclude(true)
+        .parents(false)
         .require_git(false)
         .follow_links(follow_symlinks)
         .sort_by_file_name(|a, b| a.cmp(b))
@@ -173,27 +156,30 @@ pub fn walk_fs(
         root: root.to_path_buf(),
         files,
         truncated,
-        mode: Mode::Fs,
     }
 }
 
-/// Role tagging (spec §6.1): example/test-support by path component.
-pub fn path_roles(rel: &str) -> Vec<String> {
-    let mut example = false;
-    let mut test_support = false;
-    for part in rel.split('/') {
-        match part {
-            "examples" | "example" | "docs" => example = true,
-            "tests" | "test" => test_support = true,
-            _ => {}
-        }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    #[test]
+    fn scan_root_does_not_inherit_parent_gitignore_rules() {
+        static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
+        let suffix = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
+        let parent = std::env::temp_dir().join(format!(
+            "kenbun-fileset-parent-{}-{suffix}",
+            std::process::id()
+        ));
+        let root = parent.join("fixture");
+        std::fs::create_dir_all(root.join("packages/lib")).expect("create fixture tree");
+        std::fs::write(parent.join(".gitignore"), "lib/\n").expect("write parent ignore");
+        std::fs::write(root.join("packages/lib/package.json"), "{}\n")
+            .expect("write nested manifest");
+
+        let files = walk_fs(&root, None, false, &[]);
+        assert!(files.contains("packages/lib/package.json"));
+        let _ = std::fs::remove_dir_all(parent);
     }
-    let mut roles = Vec::new();
-    if example {
-        roles.push("example".to_string());
-    }
-    if test_support {
-        roles.push("test-support".to_string());
-    }
-    roles
 }

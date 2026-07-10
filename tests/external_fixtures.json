@@ -1,0 +1,351 @@
+[
+  {
+    "name": "fastapi-basic",
+    "repository": "test-patrick/kenbun-fastapi-basic",
+    "revision": "ed740d6495d5b6b59b053730b3eac0d9680c1a66",
+    "expected": {
+      "applications": [{
+        "application_dir": ".",
+        "technologies": ["framework:primary:fastapi:high", "language:supporting:python:high"],
+        "entrypoint": "main:app",
+        "dependency_managers": {"python": "uv"}
+      }]
+    }
+  },
+  {
+    "name": "django-basic",
+    "repository": "test-patrick/kenbun-django-basic",
+    "revision": "0f251b75317b118b1718e0cd019da24af2bde780",
+    "expected": {
+      "applications": [{
+        "application_dir": ".",
+        "technologies": ["framework:primary:django:high", "language:supporting:python:high"],
+        "dependency_managers": {"python": "uv"}
+      }]
+    }
+  },
+  {
+    "name": "flask-basic",
+    "repository": "test-patrick/kenbun-flask-basic",
+    "revision": "1d56f352100bf827c74366acc8a900162e383b7b",
+    "expected": {
+      "applications": [{
+        "application_dir": ".",
+        "technologies": ["framework:primary:flask:high", "language:supporting:python:high"],
+        "dependency_managers": {"python": "uv"}
+      }]
+    }
+  },
+  {
+    "name": "nextjs-basic",
+    "repository": "test-patrick/kenbun-nextjs-basic",
+    "revision": "e8fd986eb82e3eb61b6f6758920b5056fe29d8a0",
+    "expected": {
+      "applications": [{
+        "application_dir": ".",
+        "technologies": ["framework:primary:nextjs:high", "language:supporting:typescript:high", "ui-framework:supporting:react:high"],
+        "dependency_managers": {"node": "npm"},
+        "build_scripts": [["npm", "next build", ["next", "build"]]]
+      }]
+    }
+  },
+  {
+    "name": "astro-basic",
+    "repository": "test-patrick/kenbun-astro-basic",
+    "revision": "6aca222c2d69873923e2eb945ff18b0795836da0",
+    "expected": {
+      "applications": [{
+        "application_dir": ".",
+        "technologies": ["framework:primary:astro:high", "language:supporting:typescript:high"],
+        "dependency_managers": {"node": "npm"},
+        "build_scripts": [["npm", "astro build", ["astro", "build"]]]
+      }]
+    }
+  },
+  {
+    "name": "nuxt-basic",
+    "repository": "test-patrick/kenbun-nuxt-basic",
+    "revision": "c2dc8e87b48ef00f1a905432e9e8b201c75c9404",
+    "expected": {
+      "applications": [{
+        "application_dir": ".",
+        "technologies": ["framework:primary:nuxt:high", "language:supporting:typescript:high", "ui-framework:supporting:vue:high"],
+        "dependency_managers": {"node": "npm"},
+        "build_scripts": [["npm", "nuxt build", ["nuxt", "build"]]]
+      }]
+    }
+  },
+  {
+    "name": "sveltekit-basic",
+    "repository": "test-patrick/kenbun-sveltekit-basic",
+    "revision": "f3966ac4009fc8f0946d41d3e5cc463025276e80",
+    "expected": {
+      "applications": [{
+        "application_dir": ".",
+        "technologies": ["build-tool:supporting:vite:high", "framework:primary:sveltekit:high", "language:supporting:typescript:high", "ui-framework:supporting:svelte:high"],
+        "dependency_managers": {"node": "npm"},
+        "build_scripts": [["npm", "vite build", ["vite", "build"]]]
+      }]
+    }
+  },
+  {
+    "name": "tanstack-start-basic",
+    "repository": "test-patrick/kenbun-tanstack-start-basic",
+    "revision": "0539925fc4f848381597da9946fc8cda0d67979c",
+    "expected": {
+      "applications": [{
+        "application_dir": ".",
+        "technologies": ["build-tool:supporting:vite:high", "framework:primary:tanstack-start:high", "language:supporting:typescript:high", "ui-framework:supporting:react:high"],
+        "dependency_managers": {"node": "npm"},
+        "build_scripts": [["npm", "vite build", ["vite", "build"]]]
+      }]
+    }
+  },
+  {
+    "name": "react-router-basic",
+    "repository": "test-patrick/kenbun-react-router-basic",
+    "revision": "eaaa53d894f3f85893140d762fc9e13e09c50a6d",
+    "expected": {
+      "applications": [{
+        "application_dir": ".",
+        "technologies": ["build-tool:supporting:vite:high", "framework:primary:react-router:high", "language:supporting:typescript:high", "ui-framework:supporting:react:high"],
+        "dependency_managers": {"node": "npm"},
+        "build_scripts": [["npm", "react-router build", ["react-router", "build"]]]
+      }]
+    }
+  },
+  {
+    "name": "solidstart-basic",
+    "repository": "test-patrick/kenbun-solidstart-basic",
+    "revision": "2d52a0285a97561c6f6cd230c468d0eb9f619fbb",
+    "expected": {
+      "applications": [{
+        "application_dir": ".",
+        "technologies": ["framework:primary:solidstart:high", "language:supporting:typescript:high", "ui-framework:supporting:solid:high"],
+        "dependency_managers": {"node": "npm"},
+        "build_scripts": [["npm", "vinxi build", ["vinxi", "build"]]]
+      }]
+    }
+  },
+  {
+    "name": "remix-basic",
+    "repository": "test-patrick/kenbun-remix-basic",
+    "revision": "acc275229f219583c3097fe540625a88b87644ba",
+    "expected": {
+      "applications": [{
+        "application_dir": ".",
+        "technologies": ["build-tool:supporting:vite:high", "framework:primary:remix:high", "language:supporting:typescript:high", "ui-framework:supporting:react:high"],
+        "dependency_managers": {"node": "npm"},
+        "build_scripts": [["npm", "remix vite:build", ["remix", "vite:build"]]]
+      }]
+    }
+  },
+  {
+    "name": "vite-react-basic",
+    "repository": "test-patrick/kenbun-vite-react-basic",
+    "revision": "9698ba1aee6c47f507dd18a8c9200bebdb8f1505",
+    "expected": {
+      "applications": [{
+        "application_dir": ".",
+        "technologies": ["build-tool:primary:vite:high", "language:supporting:javascript:high", "ui-framework:supporting:react:high"],
+        "dependency_managers": {"node": "npm"},
+        "build_scripts": [["npm", "vite build", ["vite", "build"]]]
+      }]
+    }
+  },
+  {
+    "name": "vite-boundaries",
+    "repository": "test-patrick/kenbun-vite-boundaries",
+    "revision": "2670c8e6d3e6be2631a76122567d2930732e2716",
+    "expected": {
+      "workspace": {"kind": "npm", "path": ".", "virtual_root": true, "members": [".", "apps/spa", "packages/library"]},
+      "applications": [{
+        "application_dir": "apps/spa",
+        "technologies": ["build-tool:primary:vite:high", "language:supporting:typescript:high", "ui-framework:supporting:react:high"],
+        "dependency_managers": {"node": "npm"},
+        "build_scripts": [["npm", "tsc -b && vite build", null]]
+      }]
+    }
+  },
+  {
+    "name": "fullstack-directories",
+    "repository": "test-patrick/kenbun-fullstack-directories",
+    "revision": "ab1dae1c9aa59b735a9e63f0492680ce9b16bd6c",
+    "expected": {
+      "applications": [
+        {
+          "application_dir": "backend",
+          "technologies": ["framework:primary:fastapi:high", "language:supporting:python:high"],
+          "entrypoint": "main:app",
+          "dependency_managers": {"python": "uv"}
+        },
+        {
+          "application_dir": "frontend",
+          "technologies": ["framework:primary:nextjs:high", "language:supporting:typescript:high", "ui-framework:supporting:react:high"],
+          "dependency_managers": {"node": "npm"},
+          "build_scripts": [["npm", "next build", ["next", "build"]]]
+        }
+      ]
+    }
+  },
+  {
+    "name": "no-app",
+    "repository": "test-patrick/kenbun-no-app",
+    "revision": "10f14537512ef9258b2c77cf50f86f032bbf8c12",
+    "expected": {"applications": [], "diagnostic_codes": ["KB102"]}
+  },
+  {
+    "name": "workspace-uv",
+    "repository": "test-patrick/kenbun-workspace-uv",
+    "revision": "b856a62872b79ba20ceb821383a598d69b72007a",
+    "expected": {
+      "workspace": {"kind": "uv", "path": ".", "virtual_root": true, "members": [".", "apps/admin", "apps/api", "packages/shared"]},
+      "applications": [
+        {
+          "application_dir": "apps/admin",
+          "technologies": ["framework:primary:django:high", "language:supporting:python:high"],
+          "dependency_managers": {"python": "uv"}
+        },
+        {
+          "application_dir": "apps/api",
+          "technologies": ["framework:primary:fastapi:high", "language:supporting:python:high"],
+          "entrypoint": "main:app",
+          "dependency_managers": {"python": "uv"}
+        }
+      ]
+    }
+  },
+  {
+    "name": "workspace-npm",
+    "repository": "test-patrick/kenbun-workspace-npm",
+    "revision": "a404bb62b41d4b94dca4a42d9af03b5651b15d07",
+    "expected": {
+      "workspace": {"kind": "npm", "path": ".", "virtual_root": true, "members": [".", "apps/web", "packages/lib"]},
+      "applications": [{
+        "application_dir": "apps/web",
+        "technologies": ["framework:primary:nextjs:high", "language:supporting:typescript:high", "ui-framework:supporting:react:high"],
+        "dependency_managers": {"node": "npm"},
+        "build_scripts": [["npm", "next build", ["next", "build"]]]
+      }]
+    }
+  },
+  {
+    "name": "workspace-pnpm",
+    "repository": "test-patrick/kenbun-workspace-pnpm",
+    "revision": "f239edb861f47a273007b0e61af89700eb046220",
+    "expected": {
+      "workspace": {"kind": "pnpm", "path": ".", "virtual_root": true, "members": [".", "apps/site", "packages/lib"]},
+      "applications": [{
+        "application_dir": "apps/site",
+        "technologies": ["framework:primary:astro:high", "language:supporting:typescript:high"],
+        "dependency_managers": {"node": "pnpm"},
+        "build_scripts": [["pnpm", "astro build", ["astro", "build"]]]
+      }]
+    }
+  },
+  {
+    "name": "workspace-yarn",
+    "repository": "test-patrick/kenbun-workspace-yarn",
+    "revision": "ec2ce616efe9d6ad3ae0979a324a1f09370ad3a0",
+    "expected": {
+      "workspace": {"kind": "yarn", "path": ".", "virtual_root": true, "members": [".", "apps/web", "packages/lib"]},
+      "applications": [{
+        "application_dir": "apps/web",
+        "technologies": ["build-tool:supporting:vite:high", "framework:primary:sveltekit:high", "language:supporting:typescript:high", "ui-framework:supporting:svelte:high"],
+        "dependency_managers": {"node": "yarn"},
+        "build_scripts": [["yarn", "vite build", ["vite", "build"]]]
+      }]
+    }
+  },
+  {
+    "name": "workspace-bun",
+    "repository": "test-patrick/kenbun-workspace-bun",
+    "revision": "4d3e1d3a1ca5c06208544a4da454d41290cedd56",
+    "expected": {
+      "workspace": {"kind": "bun", "path": ".", "virtual_root": true, "members": [".", "apps/web", "packages/lib"]},
+      "applications": [{
+        "application_dir": "apps/web",
+        "technologies": ["framework:primary:nuxt:high", "language:supporting:typescript:high", "ui-framework:supporting:vue:high"],
+        "dependency_managers": {"node": "bun"},
+        "build_scripts": [["bun", "nuxt build", ["nuxt", "build"]]]
+      }]
+    }
+  },
+  {
+    "name": "cross-inertia-fastapi-basic",
+    "repository": "usecross/cross-inertia-templates",
+    "revision": "28db570d970ae4e2a64ae5f8c033b0c3b2d98f92",
+    "scan_subdirectory": "fastapi-basic",
+    "expected": {
+      "applications": [{
+        "application_dir": ".",
+        "technologies": ["build-tool:supporting:vite:high", "framework:primary:fastapi:high", "integration:supporting:cross-inertia:high", "language:supporting:python:high", "language:supporting:typescript:high", "ui-framework:supporting:react:high"],
+        "entrypoint": "main:app",
+        "dependency_managers": {"node": "bun", "python": "uv"},
+        "build_scripts": [["bun", "tsc && vite build", null]]
+      }]
+    }
+  },
+  {
+    "name": "workspace-uv-api-member",
+    "repository": "test-patrick/kenbun-workspace-uv",
+    "revision": "b856a62872b79ba20ceb821383a598d69b72007a",
+    "scan_subdirectory": "apps/api",
+    "expected_from": "workspace-uv",
+    "expected_overrides": {"upload_root": "../..", "scan_origin": "apps/api"}
+  },
+  {
+    "name": "workspace-npm-web-member",
+    "repository": "test-patrick/kenbun-workspace-npm",
+    "revision": "a404bb62b41d4b94dca4a42d9af03b5651b15d07",
+    "scan_subdirectory": "apps/web",
+    "expected_from": "workspace-npm",
+    "expected_overrides": {"upload_root": "../..", "scan_origin": "apps/web"}
+  },
+  {
+    "name": "workspace-npm-web-nested",
+    "repository": "test-patrick/kenbun-workspace-npm",
+    "revision": "a404bb62b41d4b94dca4a42d9af03b5651b15d07",
+    "scan_subdirectory": "apps/web/app",
+    "expected_from": "workspace-npm",
+    "expected_overrides": {"upload_root": "../../..", "scan_origin": "apps/web/app"}
+  },
+  {
+    "name": "workspace-pnpm-site-member",
+    "repository": "test-patrick/kenbun-workspace-pnpm",
+    "revision": "f239edb861f47a273007b0e61af89700eb046220",
+    "scan_subdirectory": "apps/site",
+    "expected_from": "workspace-pnpm",
+    "expected_overrides": {"upload_root": "../..", "scan_origin": "apps/site"}
+  },
+  {
+    "name": "workspace-yarn-web-member",
+    "repository": "test-patrick/kenbun-workspace-yarn",
+    "revision": "ec2ce616efe9d6ad3ae0979a324a1f09370ad3a0",
+    "scan_subdirectory": "apps/web",
+    "expected_from": "workspace-yarn",
+    "expected_overrides": {"upload_root": "../..", "scan_origin": "apps/web"}
+  },
+  {
+    "name": "workspace-bun-web-member",
+    "repository": "test-patrick/kenbun-workspace-bun",
+    "revision": "4d3e1d3a1ca5c06208544a4da454d41290cedd56",
+    "scan_subdirectory": "apps/web",
+    "expected_from": "workspace-bun",
+    "expected_overrides": {"upload_root": "../..", "scan_origin": "apps/web"}
+  },
+  {
+    "name": "fullstack-backend-hint",
+    "repository": "test-patrick/kenbun-fullstack-directories",
+    "revision": "ab1dae1c9aa59b735a9e63f0492680ce9b16bd6c",
+    "scan_arguments": {"application_dir": "backend"},
+    "expected_from": "fullstack-directories"
+  },
+  {
+    "name": "fullstack-frontend-hint",
+    "repository": "test-patrick/kenbun-fullstack-directories",
+    "revision": "ab1dae1c9aa59b735a9e63f0492680ce9b16bd6c",
+    "scan_arguments": {"application_dir": "frontend"},
+    "expected_from": "fullstack-directories"
+  }
+]

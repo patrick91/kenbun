@@ -1,4 +1,4 @@
-"""Fixture tests for kenbun.scan — spec §15 golden-corpus subset."""
+"""Filesystem regression tests for kenbun.scan."""
 
 from pathlib import Path
 
@@ -29,6 +29,26 @@ def codes(result: kenbun.ScanResult) -> list[str]:
     return [d.code for d in result.diagnostics]
 
 
+def app(result: kenbun.ScanResult, application_dir: str = ".") -> kenbun.Application:
+    return next(
+        application
+        for application in result.applications
+        if application.application_dir == application_dir
+    )
+
+
+def technology(application: kenbun.Application, name: str) -> kenbun.Technology:
+    return next(item for item in application.technologies if item.name == name)
+
+
+def dependencies(
+    application: kenbun.Application, ecosystem: str = "python"
+) -> kenbun.DependencySet:
+    return next(
+        item for item in application.dependencies if item.ecosystem == ecosystem
+    )
+
+
 # ── happy paths ─────────────────────────────────────────────────────────────
 
 
@@ -43,23 +63,26 @@ def test_single_app_high_confidence(tmp_path: Path) -> None:
     )
     result = kenbun.scan(tmp_path)
 
-    assert len(result.deploy_targets) == 1
-    target = result.deploy_targets[0]
-    assert target.project_path == "."
-    assert target.confidence == "high"
-    assert target.recommended
-    assert target.entrypoint is not None
-    assert target.entrypoint.as_string == "app.main:app"
-    assert target.entrypoint.source == "inferred"
-    assert not target.entrypoint.is_factory
-    assert result.classification.uses_fastapi == "yes"
-    assert result.classification.python == "yes"
+    assert len(result.applications) == 1
+    application = app(result)
+    assert application.name == "demo"
+    fastapi = technology(application, "fastapi")
+    assert fastapi.kind == "framework"
+    assert fastapi.role == "primary"
+    assert fastapi.confidence == "high"
+    python = technology(application, "python")
+    assert python.kind == "language"
+    assert python.role == "supporting"
+    assert application.entrypoint is not None
+    assert application.entrypoint.as_string == "app.main:app"
+    assert application.entrypoint.source == "inferred"
+    assert not application.entrypoint.is_factory
 
 
 def test_flat_main_py(tmp_path: Path) -> None:
     make(tmp_path, {"pyproject.toml": FASTAPI_PYPROJECT, "main.py": APP_MAIN})
     result = kenbun.scan(tmp_path)
-    assert result.deploy_targets[0].entrypoint.as_string == "main:app"
+    assert app(result).entrypoint.as_string == "main:app"
 
 
 def test_create_app_idiom_is_instance(tmp_path: Path) -> None:
@@ -76,10 +99,10 @@ def test_create_app_idiom_is_instance(tmp_path: Path) -> None:
         },
     )
     result = kenbun.scan(tmp_path)
-    target = result.deploy_targets[0]
-    assert target.entrypoint.as_string == "main:app"
-    assert not target.entrypoint.is_factory
-    assert target.confidence == "high"
+    application = app(result)
+    assert application.entrypoint.as_string == "main:app"
+    assert not application.entrypoint.is_factory
+    assert technology(application, "fastapi").confidence == "high"
 
 
 def test_factory_only_capped_kb112(tmp_path: Path) -> None:
@@ -95,10 +118,10 @@ def test_factory_only_capped_kb112(tmp_path: Path) -> None:
         },
     )
     result = kenbun.scan(tmp_path)
-    target = result.deploy_targets[0]
-    assert target.entrypoint.is_factory
-    assert target.entrypoint.attribute == "create_app"
-    assert target.confidence == "medium"
+    application = app(result)
+    assert application.entrypoint.is_factory
+    assert application.entrypoint.attribute == "create_app"
+    assert technology(application, "fastapi").confidence == "medium"
     assert "KB112" in codes(result)
 
 
@@ -116,7 +139,7 @@ def test_variable_precedence_app_over_api(tmp_path: Path) -> None:
         },
     )
     result = kenbun.scan(tmp_path)
-    assert result.deploy_targets[0].entrypoint.attribute == "app"
+    assert app(result).entrypoint.attribute == "app"
 
 
 def test_tool_fastapi_entrypoint_wins(tmp_path: Path) -> None:
@@ -130,18 +153,18 @@ def test_tool_fastapi_entrypoint_wins(tmp_path: Path) -> None:
         },
     )
     result = kenbun.scan(tmp_path)
-    target = result.deploy_targets[0]
-    assert target.entrypoint.source == "tool-fastapi"
-    assert target.entrypoint.as_string == "src_pkg.serve:app"
-    assert target.confidence == "high"
+    application = app(result)
+    assert application.entrypoint.source == "tool-fastapi"
+    assert application.entrypoint.as_string == "src_pkg.serve:app"
+    assert technology(application, "fastapi").confidence == "high"
 
 
 def test_entrypoint_hint_validated(tmp_path: Path) -> None:
     make(tmp_path, {"pyproject.toml": FASTAPI_PYPROJECT, "serve.py": APP_MAIN})
     result = kenbun.scan(tmp_path, entrypoint="serve:app")
-    target = result.deploy_targets[0]
-    assert target.entrypoint.source == "hint"
-    assert target.entrypoint.as_string == "serve:app"
+    application = app(result)
+    assert application.entrypoint.source == "hint"
+    assert application.entrypoint.as_string == "serve:app"
 
     missing = kenbun.scan(tmp_path, entrypoint="nope.missing:app")
     assert "KB503" in codes(missing)
@@ -160,10 +183,10 @@ def test_src_layout_medium_kb111(tmp_path: Path) -> None:
         },
     )
     result = kenbun.scan(tmp_path)
-    target = result.deploy_targets[0]
-    assert target.confidence == "medium"
-    assert target.entrypoint.as_string == "api.main:app"
-    assert target.entrypoint.import_root.endswith("src")
+    application = app(result)
+    assert technology(application, "fastapi").confidence == "medium"
+    assert application.entrypoint.as_string == "api.main:app"
+    assert application.entrypoint.import_root.endswith("src")
     assert "KB111" in codes(result)
 
 
@@ -179,9 +202,10 @@ def test_binding_less_main_shadows_real_app(tmp_path: Path) -> None:
         },
     )
     result = kenbun.scan(tmp_path)
-    target = result.deploy_targets[0]
-    assert target.entrypoint.as_string == "app.main:app"
-    assert target.confidence == "medium"  # production wouldn't find it
+    application = app(result)
+    assert application.entrypoint.as_string == "app.main:app"
+    # Production wouldn't find it because an earlier candidate shadows it.
+    assert technology(application, "fastapi").confidence == "medium"
     assert "KB111" in codes(result)
 
 
@@ -195,9 +219,9 @@ def test_reexport_from_package_init(tmp_path: Path) -> None:
         },
     )
     result = kenbun.scan(tmp_path)
-    target = result.deploy_targets[0]
-    assert target.entrypoint.module == "backend"
-    assert target.entrypoint.attribute == "app"
+    application = app(result)
+    assert application.entrypoint.module == "backend"
+    assert application.entrypoint.attribute == "app"
 
 
 # ── failure modes (#976) ────────────────────────────────────────────────────
@@ -206,10 +230,8 @@ def test_reexport_from_package_init(tmp_path: Path) -> None:
 def test_empty_directory_kb100(tmp_path: Path) -> None:
     (tmp_path / "README.md").write_text("hi")
     result = kenbun.scan(tmp_path)
-    assert result.deploy_targets == []
+    assert result.applications == []
     assert "KB100" in codes(result)
-    assert result.classification.python == "no"
-    assert result.classification.uses_fastapi == "no"
 
 
 def test_syntax_error_kb200_and_kb103(tmp_path: Path) -> None:
@@ -225,10 +247,12 @@ def test_syntax_error_kb200_and_kb103(tmp_path: Path) -> None:
     kb200 = next(d for d in result.diagnostics if d.code == "KB200")
     assert kb200.path == "main.py"
     assert kb200.span is not None and kb200.span.start_line >= 1
-    # framework declared but no app object: placeholder target + KB103
+    # A declared framework remains an application even without an entrypoint.
     assert "KB103" in codes(result)
-    assert len(result.deploy_targets) == 1
-    assert result.deploy_targets[0].entrypoint is None
+    assert len(result.applications) == 1
+    application = app(result)
+    assert application.entrypoint is None
+    assert technology(application, "fastapi").confidence == "medium"
 
 
 def test_library_project_kb102(tmp_path: Path) -> None:
@@ -237,10 +261,17 @@ def test_library_project_kb102(tmp_path: Path) -> None:
         {"pyproject.toml": '[project]\nname = "lib"\ndependencies = ["httpx"]\n'},
     )
     result = kenbun.scan(tmp_path)
-    assert result.deploy_targets == []
+    assert result.applications == []
     assert "KB102" in codes(result)
-    assert result.classification.python == "yes"
-    assert result.classification.uses_fastapi == "no"
+
+
+def test_convention_only_fastapi_has_primary_technology(tmp_path: Path) -> None:
+    make(tmp_path, {"main.py": APP_MAIN})
+    application = app(kenbun.scan(tmp_path))
+    fastapi = technology(application, "fastapi")
+    assert fastapi.role == "primary"
+    assert fastapi.confidence == "low"
+    assert application.entrypoint.as_string == "main:app"
 
 
 # ── dependency hygiene (#960) ───────────────────────────────────────────────
@@ -265,9 +296,9 @@ def test_poetry_classic_kb306_kb307(tmp_path: Path) -> None:
     assert "KB306" in all_codes  # poetry detected
     assert "KB301" in all_codes  # not on the evident install path
     assert "KB307" in all_codes  # nothing installable declares fastapi
-    assert result.classification.uses_fastapi == "yes"
-    # target exists but is capped
-    assert result.deploy_targets[0].confidence == "medium"
+    application = app(result)
+    assert technology(application, "fastapi").confidence == "medium"
+    assert technology(application, "python").kind == "language"
 
 
 def test_requirements_only_project(tmp_path: Path) -> None:
@@ -279,11 +310,11 @@ def test_requirements_only_project(tmp_path: Path) -> None:
         },
     )
     result = kenbun.scan(tmp_path)
-    target = result.deploy_targets[0]
-    assert target.confidence == "high"
-    project = result.projects[0]
-    assert project.dependencies.package_manager == "pip"
-    assert any(d.name == "fastapi" for d in project.dependencies.declared)
+    application = app(result)
+    assert technology(application, "fastapi").confidence == "high"
+    python_dependencies = dependencies(application)
+    assert python_dependencies.package_manager == "pip"
+    assert any(d.name == "fastapi" for d in python_dependencies.declared)
 
 
 def test_both_manifests_kb300(tmp_path: Path) -> None:
@@ -313,7 +344,7 @@ def test_dependency_group_only_kb301(tmp_path: Path) -> None:
     )
     result = kenbun.scan(tmp_path)
     assert "KB301" in codes(result)
-    assert result.deploy_targets[0].confidence == "medium"
+    assert technology(app(result), "fastapi").confidence == "medium"
 
 
 def test_python_version_conflict_kb700(tmp_path: Path) -> None:
@@ -345,7 +376,7 @@ def test_uv_lock_resolved_versions(tmp_path: Path) -> None:
         },
     )
     result = kenbun.scan(tmp_path)
-    resolved = result.projects[0].dependencies.resolved
+    resolved = dependencies(app(result)).resolved
     assert ("fastapi", "0.115.8") in [(r.name, r.version) for r in resolved]
 
 
@@ -381,30 +412,34 @@ def test_workspace_from_root(tmp_path: Path) -> None:
     assert result.workspace is not None
     assert result.workspace.virtual_root
     assert result.workspace.members == [".", "apps/admin", "apps/api", "packages/core"]
-    assert [t.project_path for t in result.deploy_targets] == ["apps/admin", "apps/api"]
-    # tie at high confidence, no affinity → KB110, deterministic recommendation
-    assert "KB110" in codes(result)
-    assert result.deploy_targets[0].recommended
+    assert [application.application_dir for application in result.applications] == [
+        "apps/admin",
+        "apps/api",
+    ]
 
 
-def test_workspace_from_member_affinity(tmp_path: Path) -> None:
+def test_workspace_from_member_preserves_origin(tmp_path: Path) -> None:
     root = workspace_fixture(tmp_path)
     result = kenbun.scan(root / "apps" / "api")
     assert result.upload_root == "../.."
     assert result.scan_origin == "apps/api"
-    recommended = [t for t in result.deploy_targets if t.recommended]
-    assert recommended[0].project_path == "apps/api"
-    assert "KB110" not in codes(result)  # location disambiguates
+    assert [application.application_dir for application in result.applications] == [
+        "apps/admin",
+        "apps/api",
+    ]
 
 
-def test_workspace_from_library_member_kb115(tmp_path: Path) -> None:
+def test_workspace_from_library_member_reports_sibling_apps(tmp_path: Path) -> None:
     root = workspace_fixture(tmp_path)
     result = kenbun.scan(root / "packages" / "core")
-    assert "KB115" in codes(result)
-    assert result.deploy_targets  # sibling apps still reported
+    assert result.scan_origin == "packages/core"
+    assert [application.application_dir for application in result.applications] == [
+        "apps/admin",
+        "apps/api",
+    ]
 
 
-def test_example_never_recommended(tmp_path: Path) -> None:
+def test_example_and_application_are_deterministically_ordered(tmp_path: Path) -> None:
     make(
         tmp_path,
         {
@@ -415,15 +450,18 @@ def test_example_never_recommended(tmp_path: Path) -> None:
         },
     )
     result = kenbun.scan(tmp_path)
-    recommended = [t for t in result.deploy_targets if t.recommended]
-    assert recommended[0].project_path == "backend"
-    assert "KB110" not in codes(result)  # an example can't create ambiguity
+    assert [application.application_dir for application in result.applications] == [
+        "backend",
+        "examples/demo",
+    ]
 
 
-def test_target_dir_validation(tmp_path: Path) -> None:
+def test_application_dir_validation(tmp_path: Path) -> None:
     make(tmp_path, {"pyproject.toml": FASTAPI_PYPROJECT, "main.py": APP_MAIN})
-    assert "KB500" in codes(kenbun.scan(tmp_path, target_dir="nope"))
-    assert "KB501" in codes(kenbun.scan(tmp_path, target_dir="../escape"))
+    assert "KB500" in codes(kenbun.scan(tmp_path, application_dir="nope"))
+    assert "KB501" in codes(kenbun.scan(tmp_path, application_dir="../escape"))
+    assert "KB501" in codes(kenbun.scan(tmp_path, application_dir="/frontend"))
+    assert "KB501" in codes(kenbun.scan(tmp_path, application_dir=r"C:\frontend"))
 
 
 # ── output contract ─────────────────────────────────────────────────────────
@@ -439,9 +477,16 @@ def test_to_json_shape(tmp_path: Path) -> None:
 
     make(tmp_path, {"pyproject.toml": FASTAPI_PYPROJECT, "main.py": APP_MAIN})
     data = json.loads(kenbun.scan(tmp_path).to_json())
-    assert data["schema_version"] == 0
-    assert data["deploy_targets"][0]["entrypoint"]["as_string"] == "main:app"
-    assert data["classification"]["uses_fastapi"] == "yes"
+    assert data["schema_version"] == 1
+    assert data["applications"][0]["application_dir"] == "."
+    assert data["applications"][0]["entrypoint"]["as_string"] == "main:app"
+    assert [item["name"] for item in data["applications"][0]["technologies"]] == [
+        "fastapi",
+        "python",
+    ]
+    assert "projects" not in data
+    assert "deploy_targets" not in data
+    assert "classification" not in data
 
 
 def test_venv_and_gitignore_excluded(tmp_path: Path) -> None:
@@ -457,11 +502,11 @@ def test_venv_and_gitignore_excluded(tmp_path: Path) -> None:
         },
     )
     result = kenbun.scan(tmp_path)
-    assert len(result.deploy_targets) == 1
-    assert result.deploy_targets[0].project_path == "."
+    assert len(result.applications) == 1
+    assert app(result).application_dir == "."
 
 
-# ── SBOM-style classification fixtures ──────────────────────────────────────
+# ── SBOM-style manifest fixtures ────────────────────────────────────────────
 
 
 def test_pipfile_project(tmp_path: Path) -> None:
@@ -475,14 +520,15 @@ def test_pipfile_project(tmp_path: Path) -> None:
         },
     )
     result = kenbun.scan(tmp_path)
-    assert result.classification.uses_fastapi == "yes"
-    project = result.projects[0]
-    assert project.dependencies.package_manager == "pipenv"
-    assert any(d.name == "fastapi" for d in project.dependencies.declared)
+    application = app(result)
+    assert technology(application, "fastapi").role == "primary"
+    python_dependencies = dependencies(application)
+    assert python_dependencies.package_manager == "pipenv"
+    assert any(d.name == "fastapi" for d in python_dependencies.declared)
     assert "KB306" in codes(result)
 
 
-def test_setup_py_string_scan_is_likely(tmp_path: Path) -> None:
+def test_setup_py_string_scan_does_not_create_an_application(tmp_path: Path) -> None:
     make(
         tmp_path,
         {
@@ -495,15 +541,9 @@ def test_setup_py_string_scan_is_likely(tmp_path: Path) -> None:
         },
     )
     result = kenbun.scan(tmp_path)
-    # string scan only: never "yes", never a declared dep — spec §13
-    assert result.classification.uses_fastapi == "likely"
-    assert result.classification.python == "yes"
-    assert all(
-        d.name != "fastapi"
-        for p in result.projects
-        if p.dependencies
-        for d in p.dependencies.declared
-    )
+    # setup.py is string-scanned but never executed or treated as a declaration.
+    assert result.applications == []
+    assert "KB102" in codes(result)
 
 
 def test_pdm_backend_detected(tmp_path: Path) -> None:
@@ -518,8 +558,9 @@ def test_pdm_backend_detected(tmp_path: Path) -> None:
         },
     )
     result = kenbun.scan(tmp_path)
-    assert result.projects[0].dependencies.package_manager == "pdm"
-    assert result.classification.uses_fastapi == "yes"
+    application = app(result)
+    assert dependencies(application).package_manager == "pdm"
+    assert technology(application, "fastapi").role == "primary"
 
 
 def test_extra_ignore_files_matches_upload_set(tmp_path: Path) -> None:
@@ -535,8 +576,8 @@ def test_extra_ignore_files_matches_upload_set(tmp_path: Path) -> None:
         },
     )
     default = kenbun.scan(tmp_path)
-    assert default.deploy_targets[0].entrypoint is not None
+    assert app(default).entrypoint is not None
 
     honored = kenbun.scan(tmp_path, extra_ignore_files=[".fastapicloudignore"])
-    assert honored.deploy_targets[0].entrypoint is None
+    assert app(honored).entrypoint is None
     assert "KB103" in codes(honored)

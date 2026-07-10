@@ -1,6 +1,5 @@
 from os import PathLike
-
-def hello() -> str: ...
+from typing import Literal
 
 class Span:
     start_line: int
@@ -10,7 +9,7 @@ class Span:
 
 class Diagnostic:
     code: str
-    severity: str
+    severity: Literal["error", "warning", "info"]
     message: str
     path: str | None
     span: Span | None
@@ -71,12 +70,27 @@ class LockfileRef:
     kind: str
     parsed: bool
 
-class Dependencies:
-    package_manager: str
+class DependencySet:
+    ecosystem: Literal["python", "node"]
+    package_manager: str | None
     manifests: list[ManifestRef]
     lockfiles: list[LockfileRef]
     declared: list[DeclaredDep]
     resolved: list[ResolvedDep]
+
+class Technology:
+    name: str
+    kind: Literal["language", "framework", "ui-framework", "integration", "build-tool"]
+    role: Literal["primary", "supporting"]
+    confidence: Literal["high", "medium", "low"]
+    evidence: list[Evidence]
+
+class BuildScript:
+    name: str
+    command: str
+    package_manager: str | None
+    argv: list[str] | None
+    source: SourceRef
 
 class VersionPin:
     source: str
@@ -86,75 +100,38 @@ class PythonInfo:
     requires_python: str | None
     version_pins: list[VersionPin]
 
-class DeployTarget:
-    framework: str
-    form: str
-    project_path: str
-    entrypoint: Entrypoint | None
-    confidence: str
-    recommended: bool
-    env_vars: list[EnvVar]
-    evidence: list[Evidence]
-    diagnostics: list[Diagnostic]
-
-class Project:
-    path: str
+class Application:
+    application_dir: str
     name: str | None
-    roles: list[str]
-    frameworks: list[str]
-    deploy_targets: list[DeployTarget]
-    dependencies: Dependencies | None
+    technologies: list[Technology]
+    entrypoint: Entrypoint | None
+    dependencies: list[DependencySet]
+    build_scripts: list[BuildScript]
     env_vars: list[EnvVar]
-    python: PythonInfo
+    python: PythonInfo | None
     evidence: list[Evidence]
     diagnostics: list[Diagnostic]
 
 class Workspace:
-    kind: str
+    kind: Literal["uv", "npm", "pnpm", "yarn", "bun", "node", "mixed"]
     path: str
     virtual_root: bool
     members: list[str]
-
-class WantFile:
-    path: str
-    reason: str
-    priority: int
-    max_bytes: int
-    blob_sha: str | None
-
-class ClassificationPrimary:
-    path: str
-    evidence: str
-
-class Classification:
-    python: str
-    uses_fastapi: str
-    primary: ClassificationPrimary | None
-
-class InputInfo:
-    mode: str
-    files_seen: int
-    complete: bool
 
 class ScanResult:
     schema_version: int
     root: str
     upload_root: str
     scan_origin: str
-    status: str
-    want_files: list[WantFile]
-    input: InputInfo
     workspace: Workspace | None
-    projects: list[Project]
-    deploy_targets: list[DeployTarget]
-    classification: Classification
+    applications: list[Application]
     diagnostics: list[Diagnostic]
     def to_json(self) -> str: ...
 
 def scan(
     root: str | PathLike[str],
     *,
-    target_dir: str | None = None,
+    application_dir: str | None = None,
     entrypoint: str | None = None,
     max_files: int | None = None,
     follow_symlinks: bool = False,
