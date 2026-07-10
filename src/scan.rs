@@ -9,6 +9,7 @@ use crate::fileset::{self, FileSet};
 use crate::manifest::{self, PyProject};
 use crate::model::*;
 use crate::node::{self, RawNodeDiscovery, RawNodePackage, RawTechnologySignal};
+use crate::runtime;
 use crate::workspace;
 
 pub struct ScanOptions {
@@ -28,6 +29,14 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
         &opts.extra_ignore_files,
     );
     let mut scan_diags: Vec<Diagnostic> = Vec::new();
+    for issue in &fs.issues {
+        let diagnostic = if issue.message.contains("scan root") {
+            diag::kb800(&issue.path, &issue.message)
+        } else {
+            diag::kb801(&issue.path, &issue.message)
+        };
+        scan_diags.push(diagnostic);
+    }
     if fs.truncated {
         scan_diags.push(diag::kb802(opts.max_files.unwrap_or(0)));
     }
@@ -108,7 +117,7 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
         for dir in fs.dirs_with(marker) {
             let nested = pyproject_dirs
                 .iter()
-                .any(|p| p == &dir || (dir.starts_with(p.as_str()) && !p.is_empty()));
+                .any(|p| p == &dir || (!p.is_empty() && dir.starts_with(&format!("{p}/"))));
             if !nested {
                 project_dirs.insert(dir);
             }
@@ -126,10 +135,17 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
         if is_absolute_like(raw) || normalized.starts_with("..") {
             scan_diags.push(diag::kb501(raw));
         } else {
-            let as_project = if normalized == "." {
+            let scan_origin = if effective.scan_origin == "." {
                 String::new()
             } else {
+                effective.scan_origin.clone()
+            };
+            let as_project = if normalized == "." {
+                scan_origin
+            } else if scan_origin.is_empty() {
                 normalized.clone()
+            } else {
+                format!("{scan_origin}/{normalized}")
             };
             let exists = fs
                 .files
@@ -279,6 +295,7 @@ fn python_applications(projects: &[Project]) -> Vec<Application> {
                 build_scripts: Vec::new(),
                 env_vars: project.env_vars.clone(),
                 python: Some(project.python.clone()),
+                node: None,
                 evidence: project.evidence.clone(),
                 diagnostics,
             }
@@ -310,12 +327,24 @@ fn merge_node_applications(applications: &mut Vec<Application>, discovery: &RawN
                 build_scripts: Vec::new(),
                 env_vars: Vec::new(),
                 python: None,
+                node: None,
                 evidence: Vec::new(),
                 diagnostics: Vec::new(),
             });
             applications.len() - 1
         });
         let application = &mut applications[index];
+        application.node = Some(NodeInfo {
+            requires_node: package.requires_node.clone(),
+            version_pins: package
+                .version_pins
+                .iter()
+                .map(|pin| VersionPin {
+                    source: pin.source.clone(),
+                    value: pin.value.clone(),
+                })
+                .collect(),
+        });
         let had_primary = application
             .technologies
             .iter()
@@ -611,7 +640,10 @@ fn analyze_project(
         match fs.read_str(pp_path).map(|s| manifest::parse_pyproject(&s)) {
             Some(Ok(pp)) => parsed = Some(pp),
             Some(Err(err)) => diagnostics.push(diag::kb201(pp_path, &err)),
-            None => {}
+            None => diagnostics.push(diag::kb801(
+                pp_path,
+                "pyproject.toml is unreadable, non-UTF-8, or exceeds the 2 MiB parse cap",
+            )),
         }
     }
     let is_ws_root = parsed
@@ -630,8 +662,16 @@ fn analyze_project(
     if let (Some(pp), Some(pp_path)) = (&parsed, &files.pyproject) {
         declared.extend(manifest::pyproject_deps(pp, pp_path));
     }
-    for req in &files.requirements {
-        manifest::requirements_deps(fs, req, 0, &mut declared);
+    manifest::requirements_project_deps(fs, &files.requirements, &mut declared);
+    let mut inline_requires_python = None;
+    for script in &files.inline_scripts {
+        if let Some(source) = fs.read_str(script) {
+            let (dependencies, requires_python) = manifest::inline_script_deps(&source, script);
+            declared.extend(dependencies);
+            if inline_requires_python.is_none() {
+                inline_requires_python = requires_python;
+            }
+        }
     }
     let pipfile_path = if dir.is_empty() {
         "Pipfile".to_string()
@@ -780,38 +820,40 @@ fn analyze_project(
     let requires_python = parsed
         .as_ref()
         .and_then(|pp| pp.project.as_ref())
-        .and_then(|p| p.requires_python.clone());
-    let mut version_pins = Vec::new();
-    let pin_path = if dir.is_empty() {
-        ".python-version".to_string()
-    } else {
-        format!("{dir}/.python-version")
-    };
-    if let Some(pin) = fs.read_str(&pin_path) {
-        let pin = pin.trim().to_string();
-        if !pin.is_empty() {
-            if let (Some(req), Ok(version)) = (
-                requires_python
-                    .as_deref()
-                    .and_then(|r| r.parse::<pep440_rs::VersionSpecifiers>().ok()),
-                pin.parse::<pep440_rs::Version>(),
-            ) {
-                if !req.contains(&version) {
+        .and_then(|p| p.requires_python.clone())
+        .or(inline_requires_python);
+    let raw_version_pins = runtime::python_version_pins(fs, dir);
+    if let Some(requirement) = requires_python
+        .as_deref()
+        .and_then(|value| value.parse::<pep440_rs::VersionSpecifiers>().ok())
+    {
+        for pin in &raw_version_pins {
+            if let Ok(version) = pin
+                .value
+                .trim_start_matches(['v', 'V'])
+                .parse::<pep440_rs::Version>()
+            {
+                if !requirement.contains(&version) {
                     diagnostics.push(diag::kb700(
                         &display_path,
                         &format!(
-                            ".python-version pins {pin} but requires-python is {}",
+                            "{} pins {} but requires-python is {}",
+                            pin.source,
+                            pin.value,
                             requires_python.as_deref().unwrap_or("")
                         ),
                     ));
                 }
             }
-            version_pins.push(VersionPin {
-                source: ".python-version".to_string(),
-                value: pin,
-            });
         }
     }
+    let version_pins = raw_version_pins
+        .into_iter()
+        .map(|pin| VersionPin {
+            source: pin.source,
+            value: pin.value,
+        })
+        .collect();
 
     // ── FastAPI entrypoint resolution ──────────────────────────────────
     let tool_entrypoint = parsed
@@ -965,7 +1007,12 @@ fn detect_package_manager(
         "pdm"
     } else if has_kind("pipenv") || files.manifests.iter().any(|m| m.kind == "pipfile") {
         "pipenv"
-    } else if files.pyproject.is_some() {
+    } else if files.pyproject.is_some()
+        || files
+            .manifests
+            .iter()
+            .any(|manifest| manifest.kind == "inline-script")
+    {
         "uv"
     } else if !files.requirements.is_empty() {
         "pip"
@@ -1020,7 +1067,8 @@ fn is_absolute_like(path: &str) -> bool {
                 .is_some_and(|separator| *separator == b'/')
 }
 
-/// Dedup by (code, path, span-start), ordered by (path, span-start, code).
+/// Dedup exact diagnostics, preserving distinct actionable messages that share
+/// a code and location.
 fn dedup_sort_diags(diags: &mut Vec<Diagnostic>) {
     diags.sort_by(|a, b| {
         let key = |d: &Diagnostic| {
@@ -1031,12 +1079,14 @@ fn dedup_sort_diags(diags: &mut Vec<Diagnostic>) {
                     .map(|s| (s.start_line, s.start_col))
                     .unwrap_or((0, 0)),
                 d.code.clone(),
+                d.message.clone(),
             )
         };
         key(a).cmp(&key(b))
     });
     diags.dedup_by(|a, b| {
         a.code == b.code
+            && a.message == b.message
             && a.path == b.path
             && a.span.as_ref().map(|s| (s.start_line, s.start_col))
                 == b.span.as_ref().map(|s| (s.start_line, s.start_col))

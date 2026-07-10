@@ -5,6 +5,7 @@ mod manifest;
 mod model;
 mod node;
 mod norm;
+mod runtime;
 mod scan;
 mod workspace;
 
@@ -55,6 +56,7 @@ fn kenbun(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<model::LockfileRef>()?;
     m.add_class::<model::SourceRef>()?;
     m.add_class::<model::PythonInfo>()?;
+    m.add_class::<model::NodeInfo>()?;
     m.add_class::<model::VersionPin>()?;
     m.add_class::<model::Diagnostic>()?;
     m.add_class::<model::Evidence>()?;

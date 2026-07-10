@@ -12,7 +12,8 @@
       {
         devShells.default = with pkgs; mkShell {
           buildInputs = [
-            pdm
+            uv
+            maturin
             ruff
             cargo
             rustc

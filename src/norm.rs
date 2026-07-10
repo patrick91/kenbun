@@ -42,6 +42,13 @@ pub fn split_requirement(spec: &str) -> Option<(String, Vec<String>, String)> {
         .map(|(i, _)| i)
         .unwrap_or(s.len());
     let name = &s[..name_end];
+    if name.is_empty()
+        || !name.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        })
+    {
+        return None;
+    }
     let mut rest = &s[name_end..];
 
     let mut extras = Vec::new();

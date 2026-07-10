@@ -21,6 +21,7 @@ def package(
     scripts: dict[str, str] | None = None,
     package_manager: str | None = "npm@12.0.0",
     workspaces: list[str] | None = None,
+    engines: dict[str, str] | None = None,
 ) -> str:
     data: dict[str, object] = {
         "name": name,
@@ -33,6 +34,8 @@ def package(
         data["packageManager"] = package_manager
     if workspaces is not None:
         data["workspaces"] = workspaces
+    if engines is not None:
+        data["engines"] = engines
     return json.dumps(data)
 
 
@@ -484,3 +487,172 @@ def test_malformed_package_json_is_diagnostic_not_exception(tmp_path: Path) -> N
     result = kenbun.scan(tmp_path)
     assert result.applications == []
     assert "KB203" in [diagnostic.code for diagnostic in result.diagnostics]
+
+
+def test_pnpm_indentationless_sequence_is_supported(tmp_path: Path) -> None:
+    make(
+        tmp_path,
+        {
+            "package.json": package(name="workspace", package_manager="pnpm@11"),
+            "pnpm-workspace.yaml": "packages:\n- 'apps/*'\n- 'packages/*'\n",
+            "apps/site/package.json": package(dependencies={"astro": "6"}),
+            "apps/site/astro.config.mjs": "export default {};",
+            "packages/lib/package.json": package(name="lib"),
+        },
+    )
+    result = kenbun.scan(tmp_path)
+    assert result.workspace.members == [".", "apps/site", "packages/lib"]
+
+
+def test_workspace_brace_globs_are_supported(tmp_path: Path) -> None:
+    make(
+        tmp_path,
+        {
+            "package.json": package(
+                name="workspace",
+                workspaces=["{apps,packages}/*"],
+            ),
+            "apps/site/package.json": package(dependencies={"astro": "6"}),
+            "apps/site/astro.config.mjs": "export default {};",
+            "packages/lib/package.json": package(name="lib"),
+        },
+    )
+    assert kenbun.scan(tmp_path).workspace.members == [
+        ".",
+        "apps/site",
+        "packages/lib",
+    ]
+    member_scan = kenbun.scan(tmp_path / "apps" / "site")
+    assert member_scan.scan_origin == "apps/site"
+    assert member_scan.workspace.members == [".", "apps/site", "packages/lib"]
+
+
+def test_legacy_tanstack_start_package_is_detected(tmp_path: Path) -> None:
+    make(
+        tmp_path,
+        {
+            "package.json": package(dependencies={"@tanstack/start": "1"}),
+            "src/main.ts": "export {};",
+        },
+    )
+    assert technology(app(kenbun.scan(tmp_path)), "tanstack-start").role == "primary"
+
+
+def test_official_create_vue_typescript_scaffold_is_standalone_vite(
+    tmp_path: Path,
+) -> None:
+    make(
+        tmp_path,
+        {
+            "package.json": package(
+                dependencies={"vue": "3"},
+                dev_dependencies={"vite": "8", "typescript": "6", "vue-tsc": "3"},
+                scripts={"build": "vue-tsc -b && vite build"},
+            ),
+            "index.html": "<!doctype html>",
+            "src/main.ts": "export {};",
+        },
+    )
+    assert technology(app(kenbun.scan(tmp_path)), "vite").role == "primary"
+
+
+@pytest.mark.parametrize(
+    "command",
+    ["vite --mode build", "vite --config build", "vite --base build"],
+)
+def test_vite_option_values_do_not_count_as_build_subcommand(
+    tmp_path: Path, command: str
+) -> None:
+    make(
+        tmp_path,
+        {
+            "package.json": package(
+                dev_dependencies={"vite": "8"}, scripts={"build": command}
+            ),
+            "index.html": "<!doctype html>",
+        },
+    )
+    assert kenbun.scan(tmp_path).applications == []
+
+
+def test_mixed_language_evidence_stays_with_its_language(tmp_path: Path) -> None:
+    make(
+        tmp_path,
+        {
+            "package.json": package(dependencies={"next": "16"}),
+            "app/page.tsx": "export default function Page() {}",
+            "scripts/helper.js": "export {};",
+        },
+    )
+    application = app(kenbun.scan(tmp_path))
+    typescript_paths = {
+        evidence.path for evidence in technology(application, "typescript").evidence
+    }
+    javascript_paths = {
+        evidence.path for evidence in technology(application, "javascript").evidence
+    }
+    assert "app/page.tsx" in typescript_paths
+    assert "scripts/helper.js" not in typescript_paths
+    assert "scripts/helper.js" in javascript_paths
+
+
+def test_nested_python_manifest_owns_its_javascript_files(tmp_path: Path) -> None:
+    make(
+        tmp_path,
+        {
+            "package.json": package(dependencies={"next": "16"}),
+            "app/page.tsx": "export default function Page() {}",
+            "backend/pyproject.toml": (
+                '[project]\nname = "api"\ndependencies = ["fastapi"]\n'
+            ),
+            "backend/main.py": "from fastapi import FastAPI\napp = FastAPI()\n",
+            "backend/static/app.js": "window.backend = true;",
+        },
+    )
+    frontend = app(kenbun.scan(tmp_path))
+    evidence_paths = {
+        evidence.path for item in frontend.technologies for evidence in item.evidence
+    }
+    assert "backend/static/app.js" not in evidence_paths
+
+
+def test_node_runtime_versions_and_constraint_are_reported(tmp_path: Path) -> None:
+    make(
+        tmp_path,
+        {
+            ".tool-versions": "python 3.13.2\nnodejs 22.14.0\n",
+            "package.json": package(name="workspace", workspaces=["apps/*"]),
+            "apps/site/package.json": package(
+                dependencies={"next": "16"},
+                engines={"node": ">=20 <23"},
+                package_manager=None,
+            ),
+            "apps/site/.node-version": "v22.13.1\n",
+            "apps/site/.nvmrc": "lts/jod\n",
+            "apps/site/app/page.js": "export default function Page() {}",
+        },
+    )
+    application = app(kenbun.scan(tmp_path), "apps/site")
+    assert application.node is not None
+    assert application.node.requires_node == ">=20 <23"
+    assert {(pin.source, pin.value) for pin in application.node.version_pins} == {
+        (".tool-versions", "22.14.0"),
+        ("apps/site/.node-version", "v22.13.1"),
+        ("apps/site/.nvmrc", "lts/jod"),
+    }
+
+
+def test_nearest_node_tool_version_wins(tmp_path: Path) -> None:
+    make(
+        tmp_path,
+        {
+            ".tool-versions": "nodejs 20.19.0\n",
+            "apps/site/.tool-versions": "nodejs 22.14.0\n",
+            "apps/site/package.json": package(dependencies={"astro": "6"}),
+            "apps/site/astro.config.mjs": "export default {};",
+        },
+    )
+    pins = app(kenbun.scan(tmp_path), "apps/site").node.version_pins
+    assert [(pin.source, pin.value) for pin in pins] == [
+        ("apps/site/.tool-versions", "22.14.0")
+    ]

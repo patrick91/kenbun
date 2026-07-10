@@ -112,9 +112,14 @@ def download_archive(fixture: dict[str, Any], cache_dir: Path, offline: bool) ->
 
 
 def safe_extract(archive: Path, destination: Path) -> Path:
+    completion_marker = destination / ".kenbun-extraction-complete"
     if destination.exists():
         roots = [path for path in destination.iterdir() if path.is_dir()]
-        if len(roots) == 1:
+        if (
+            len(roots) == 1
+            and completion_marker.is_file()
+            and completion_marker.read_text().strip() == archive.name
+        ):
             return roots[0]
         shutil.rmtree(destination)
     destination.mkdir(parents=True)
@@ -130,12 +135,16 @@ def safe_extract(archive: Path, destination: Path) -> Path:
                 or not (member.isfile() or member.isdir())
             ):
                 raise RuntimeError(f"unsupported archive member: {member.name}")
-        bundle.extractall(destination)
+        if sys.version_info >= (3, 12):
+            bundle.extractall(destination, filter="data")
+        else:  # pragma: no cover - exercised by the Python 3.10/3.11 CI jobs
+            bundle.extractall(destination)
     roots = [path for path in destination.iterdir() if path.is_dir()]
     if len(roots) != 1:
         raise RuntimeError(
             f"expected one archive root in {archive}, found {len(roots)}"
         )
+    completion_marker.write_text(f"{archive.name}\n")
     return roots[0]
 
 
