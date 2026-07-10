@@ -9,6 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde_json::{Map, Value};
 
 use crate::fileset::FileSet;
+use crate::runtime::{self, RuntimePin};
 
 const LOCKFILE_NAMES: &[(&str, &str)] = &[
     ("package-lock.json", "npm"),
@@ -51,6 +52,8 @@ pub(crate) struct RawNodePackage {
     pub scripts: BTreeMap<String, String>,
     /// The unmodified packageManager value, if it was a string.
     pub explicit_package_manager: Option<String>,
+    pub requires_node: Option<String>,
+    pub version_pins: Vec<RuntimePin>,
     pub package_manager: Option<RawPackageManager>,
     /// Candidates at the nearest lock/workspace evidence level. More than one
     /// means the evidence was ambiguous and `package_manager` is None.
@@ -101,6 +104,8 @@ pub(crate) struct RawLanguageSignals {
     /// mixed-language fact.
     pub primary: Option<String>,
     pub evidence: Vec<String>,
+    pub typescript_evidence: Vec<String>,
+    pub javascript_evidence: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -145,6 +150,7 @@ struct PackageManifest {
     optional_dependencies: BTreeMap<String, String>,
     scripts: BTreeMap<String, String>,
     package_manager: Option<String>,
+    requires_node: Option<String>,
     declares_workspace: bool,
     workspace_patterns: Vec<String>,
 }
@@ -180,6 +186,17 @@ pub(crate) fn discover(fs: &FileSet) -> RawNodeDiscovery {
     }
 
     let package_dirs: Vec<String> = manifests.keys().cloned().collect();
+    let mut source_boundaries: BTreeSet<String> = package_dirs.iter().cloned().collect();
+    for marker in [
+        "pyproject.toml",
+        "requirements.txt",
+        "Pipfile",
+        "setup.py",
+        "manage.py",
+    ] {
+        source_boundaries.extend(fs.dirs_with(marker));
+    }
+    let owned_source_files = source_files_by_owner(fs, &source_boundaries);
     let mut workspace_builders: BTreeMap<String, WorkspaceBuilder> = BTreeMap::new();
 
     for (dir, manifest) in &manifests {
@@ -221,7 +238,16 @@ pub(crate) fn discover(fs: &FileSet) -> RawNodeDiscovery {
         let index_html = fs.contains(&index_html_path).then_some(index_html_path);
         let (package_manager, manager_candidates, manager_evidence) =
             infer_package_manager(fs, dir, &manifests);
-        let language = classify_language(fs, dir, &package_dirs, manifest);
+        let version_pins = runtime::node_version_pins(fs, dir);
+        let language = classify_language(
+            fs,
+            dir,
+            owned_source_files
+                .get(dir)
+                .map(Vec::as_slice)
+                .unwrap_or(&[]),
+            manifest,
+        );
         let (technologies, vite, inertia) = classify_technologies(
             fs,
             dir,
@@ -241,6 +267,8 @@ pub(crate) fn discover(fs: &FileSet) -> RawNodeDiscovery {
             optional_dependencies: manifest.optional_dependencies.clone(),
             scripts: manifest.scripts.clone(),
             explicit_package_manager: manifest.package_manager.clone(),
+            requires_node: manifest.requires_node.clone(),
+            version_pins,
             package_manager,
             package_manager_candidates: manager_candidates,
             package_manager_evidence: manager_evidence,
@@ -315,6 +343,7 @@ fn parse_package_json(
 
     let name = optional_string(object, "name", path, errors);
     let package_manager = optional_string(object, "packageManager", path, errors);
+    let requires_node = string_map(object, "engines", path, errors).remove("node");
     let dependencies = string_map(object, "dependencies", path, errors);
     let dev_dependencies = string_map(object, "devDependencies", path, errors);
     let optional_dependencies = string_map(object, "optionalDependencies", path, errors);
@@ -332,6 +361,7 @@ fn parse_package_json(
         optional_dependencies,
         scripts,
         package_manager,
+        requires_node,
         declares_workspace,
         workspace_patterns,
     }
@@ -450,6 +480,14 @@ pub(crate) fn parse_pnpm_workspace_yaml(source: &str) -> (Vec<String>, Vec<Strin
         let indentation = without_comment.len() - without_comment.trim_start().len();
 
         if indentation == 0 {
+            if in_packages && (trimmed == "-" || trimmed.starts_with("- ")) {
+                let item = trimmed.strip_prefix('-').unwrap_or(trimmed).trim();
+                match parse_yaml_scalar(item) {
+                    Ok(pattern) => patterns.push(pattern),
+                    Err(message) => errors.push(format!("line {line_number}: {message}")),
+                }
+                continue;
+            }
             if let Some(rest) = trimmed.strip_prefix("packages:") {
                 if saw_packages {
                     errors.push(format!("duplicate `packages` key at line {line_number}"));
@@ -614,22 +652,26 @@ fn expand_workspace_patterns(
                 continue;
             }
         };
-        let pattern = match glob::Pattern::new(&normalized) {
-            Ok(pattern) => pattern,
-            Err(error) => {
-                errors.push(format!("invalid workspace glob `{original}`: {error}"));
-                continue;
-            }
-        };
         let options = glob::MatchOptions {
             require_literal_separator: true,
             ..glob::MatchOptions::default()
         };
-        let matches: Vec<String> = package_dirs
-            .iter()
-            .filter(|dir| pattern.matches_with(&display_dir(dir), options))
-            .cloned()
-            .collect();
+        let mut matches = BTreeSet::new();
+        for expanded in expand_braces(&normalized) {
+            let pattern = match glob::Pattern::new(&expanded) {
+                Ok(pattern) => pattern,
+                Err(error) => {
+                    errors.push(format!("invalid workspace glob `{original}`: {error}"));
+                    continue;
+                }
+            };
+            matches.extend(
+                package_dirs
+                    .iter()
+                    .filter(|dir| pattern.matches_with(&display_dir(dir), options))
+                    .cloned(),
+            );
+        }
         if matches.is_empty() && !negative {
             unmatched.push(original.clone());
         }
@@ -670,6 +712,44 @@ fn normalize_workspace_pattern(pattern: &str) -> Result<String, String> {
         return Err("pattern escapes the workspace root".to_string());
     }
     Ok(pattern)
+}
+
+pub(crate) fn workspace_pattern_matches(pattern: &str, rel: &str) -> bool {
+    let Ok(normalized) = normalize_workspace_pattern(pattern) else {
+        return false;
+    };
+    let options = glob::MatchOptions {
+        require_literal_separator: true,
+        ..glob::MatchOptions::default()
+    };
+    expand_braces(&normalized).into_iter().any(|expanded| {
+        glob::Pattern::new(&expanded).is_ok_and(|pattern| pattern.matches_with(rel, options))
+    })
+}
+
+fn expand_braces(pattern: &str) -> Vec<String> {
+    let Some(open) = pattern.find('{') else {
+        return vec![pattern.to_string()];
+    };
+    let Some(relative_close) = pattern[open + 1..].find('}') else {
+        return vec![pattern.to_string()];
+    };
+    let close = open + 1 + relative_close;
+    let alternatives: Vec<&str> = pattern[open + 1..close].split(',').collect();
+    if alternatives.len() < 2 {
+        return vec![pattern.to_string()];
+    }
+    let mut expanded = Vec::new();
+    for alternative in alternatives {
+        let next = format!(
+            "{}{}{}",
+            &pattern[..open],
+            alternative,
+            &pattern[close + 1..]
+        );
+        expanded.extend(expand_braces(&next));
+    }
+    expanded
 }
 
 fn same_root_lockfiles(fs: &FileSet, dir: &str) -> Vec<String> {
@@ -797,7 +877,7 @@ fn known_manager_from_package_manager(raw: &str) -> Option<&'static str> {
 fn classify_language(
     fs: &FileSet,
     dir: &str,
-    package_dirs: &[String],
+    owned_source_files: &[String],
     manifest: &PackageManifest,
 ) -> RawLanguageSignals {
     let mut typescript_evidence = BTreeSet::new();
@@ -814,21 +894,18 @@ fn classify_language(
         typescript_evidence.insert("dependency:typescript".to_string());
     }
 
-    for path in fs.under(dir) {
-        if belongs_to_nested_package(path, dir, package_dirs) {
-            continue;
-        }
+    for path in owned_source_files {
         let lower = path.to_ascii_lowercase();
         if [".ts", ".tsx", ".mts", ".cts"]
             .iter()
             .any(|extension| lower.ends_with(extension))
         {
-            typescript_evidence.insert(path.to_string());
+            typescript_evidence.insert(path.clone());
         } else if [".js", ".jsx", ".mjs", ".cjs"]
             .iter()
             .any(|extension| lower.ends_with(extension))
         {
-            javascript_evidence.insert(path.to_string());
+            javascript_evidence.insert(path.clone());
         }
     }
 
@@ -841,10 +918,13 @@ fn classify_language(
     } else {
         None
     };
+    let typescript_evidence: Vec<String> = typescript_evidence.into_iter().collect();
+    let javascript_evidence: Vec<String> = javascript_evidence.into_iter().collect();
     let mut evidence: Vec<String> = typescript_evidence
-        .into_iter()
-        .chain(javascript_evidence)
+        .iter()
+        .chain(&javascript_evidence)
         .take(32)
+        .cloned()
         .collect();
     evidence.sort();
 
@@ -853,6 +933,8 @@ fn classify_language(
         javascript,
         primary,
         evidence,
+        typescript_evidence,
+        javascript_evidence,
     }
 }
 
@@ -879,7 +961,11 @@ fn classify_technologies(
         }
     }
 
-    for package in ["@tanstack/react-start", "@tanstack/solid-start"] {
+    for package in [
+        "@tanstack/react-start",
+        "@tanstack/solid-start",
+        "@tanstack/start",
+    ] {
         if let Some(evidence) = direct_dependency_evidence(manifest, package) {
             add_signal(&mut signals, "tanstack-start", "framework", evidence);
         }
@@ -890,10 +976,11 @@ fn classify_technologies(
         }
     }
 
-    if let Some(primary) = &language.primary {
-        for evidence in &language.evidence {
-            add_signal(&mut signals, primary, "language", evidence.clone());
-        }
+    for evidence in &language.typescript_evidence {
+        add_signal(&mut signals, "typescript", "language", evidence.clone());
+    }
+    for evidence in &language.javascript_evidence {
+        add_signal(&mut signals, "javascript", "language", evidence.clone());
     }
 
     let react_router_dependency = direct_dependency_evidence(manifest, "@react-router/dev");
@@ -1071,12 +1158,35 @@ fn command_invokes(script: &str, command: &str) -> bool {
 
 fn command_invokes_subcommand(script: &str, command: &str, subcommand: &str) -> bool {
     command_occurrences(script, command).any(|(tokens, command_index)| {
-        tokens
-            .iter()
-            .skip(command_index + 1)
-            .take_while(|token| !is_shell_operator(token))
-            .any(|token| token == subcommand)
+        let mut index = command_index + 1;
+        while index < tokens.len() && !is_shell_operator(&tokens[index]) {
+            let token = &tokens[index];
+            if token == "--" {
+                index += 1;
+                return tokens.get(index).is_some_and(|token| token == subcommand);
+            }
+            if token.starts_with('-') {
+                if option_takes_value(command, token) && !token.contains('=') {
+                    index += 1;
+                }
+                index += 1;
+                continue;
+            }
+            return token == subcommand;
+        }
+        false
     })
+}
+
+fn option_takes_value(command: &str, option: &str) -> bool {
+    match command {
+        "vite" => matches!(
+            option,
+            "--config" | "-c" | "--base" | "--mode" | "-m" | "--logLevel" | "--host" | "--port"
+        ),
+        "react-router" => matches!(option, "--config" | "-c" | "--mode" | "-m"),
+        _ => false,
+    }
 }
 
 fn command_occurrences<'a>(
@@ -1263,22 +1373,34 @@ fn is_shell_operator(token: &str) -> bool {
     matches!(token, ";" | "&" | "&&" | "|" | "||")
 }
 
-fn belongs_to_nested_package(path: &str, dir: &str, package_dirs: &[String]) -> bool {
-    package_dirs.iter().any(|candidate| {
-        candidate != dir
-            && is_descendant(candidate, dir)
-            && path.starts_with(&format!("{candidate}/"))
-    })
-}
-
-fn is_descendant(candidate: &str, ancestor: &str) -> bool {
-    if ancestor.is_empty() {
-        !candidate.is_empty()
-    } else {
-        candidate
-            .strip_prefix(ancestor)
-            .is_some_and(|rest| rest.starts_with('/'))
+fn source_files_by_owner(
+    fs: &FileSet,
+    boundaries: &BTreeSet<String>,
+) -> BTreeMap<String, Vec<String>> {
+    let mut owned: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for path in fs.files.keys() {
+        let mut directory = path
+            .rsplit_once('/')
+            .map(|(parent, _)| parent)
+            .unwrap_or("");
+        loop {
+            if boundaries.contains(directory) {
+                owned
+                    .entry(directory.to_string())
+                    .or_default()
+                    .push(path.clone());
+                break;
+            }
+            let Some((parent, _)) = directory.rsplit_once('/') else {
+                if boundaries.contains("") {
+                    owned.entry(String::new()).or_default().push(path.clone());
+                }
+                break;
+            };
+            directory = parent;
+        }
     }
+    owned
 }
 
 fn direct_files(fs: &FileSet, dir: &str) -> Vec<String> {
@@ -1358,6 +1480,7 @@ mod tests {
                 "devDependencies": {"vite": "7.0.0"},
                 "optionalDependencies": {"typescript": "5.9.0"},
                 "scripts": {"build": "vite build"},
+                "engines": {"node": ">=20"},
                 "workspaces": {"packages": ["apps/*", "packages/*"]}
             }"#,
         );
@@ -1368,6 +1491,7 @@ mod tests {
         assert!(manifest.dependencies.contains_key("next"));
         assert!(manifest.dev_dependencies.contains_key("vite"));
         assert!(manifest.optional_dependencies.contains_key("typescript"));
+        assert_eq!(manifest.requires_node.as_deref(), Some(">=20"));
         assert_eq!(manifest.workspace_patterns, ["apps/*", "packages/*"]);
     }
 
@@ -1598,6 +1722,7 @@ catalog:
             root,
             files: entries,
             truncated: false,
+            issues: Vec::new(),
         }
     }
 
@@ -1606,6 +1731,7 @@ catalog:
             root: std::path::PathBuf::new(),
             files: BTreeMap::new(),
             truncated: false,
+            issues: Vec::new(),
         }
     }
 }

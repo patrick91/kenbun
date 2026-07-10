@@ -31,8 +31,9 @@ pub struct ModuleAnalysis {
     pub instance_bindings: Vec<String>,
     /// function names statically returning FastAPI
     pub factories: Vec<String>,
-    /// (exported name, source module suffix, source attr) from `from .X import a [as b]`
-    pub reexports: Vec<(String, String, String)>,
+    /// (exported name, source module, source attr, relative level) from a
+    /// one-hop import.
+    pub reexports: Vec<(String, String, String, u32)>,
     pub router_usage: bool,
     pub fastapi_import: bool,
     /// any module-level name bound by assignment or import (for KB504/KB505)
@@ -119,12 +120,14 @@ pub fn analyze_module(source: &str) -> ModuleAnalysis {
                             _ => {}
                         }
                     }
-                    // one-hop re-export bookkeeping: `from .X import a [as b]`
-                    if imp.level == 1 && alias.name.as_str() != "*" {
+                    // Resolution later accepts both relative imports and
+                    // absolute imports that stay within this package.
+                    if imp.level <= 1 && alias.name.as_str() != "*" {
                         reexports.push((
                             bound.to_string(),
                             module_name.to_string(),
                             alias.name.to_string(),
+                            imp.level,
                         ));
                     }
                 }
@@ -219,6 +222,73 @@ pub fn analyze_module(source: &str) -> ModuleAnalysis {
             _ => {}
         }
     }
+
+    fn collect_conditional_names(statements: &[Stmt], names: &mut BTreeSet<String>) {
+        for statement in statements {
+            match statement {
+                Stmt::Assign(assign) => {
+                    for target in &assign.targets {
+                        if let Some(name) = expr_name(target) {
+                            names.insert(name.to_string());
+                        }
+                    }
+                }
+                Stmt::AnnAssign(assign) => {
+                    if let Some(name) = expr_name(&assign.target) {
+                        names.insert(name.to_string());
+                    }
+                }
+                Stmt::FunctionDef(function) => {
+                    names.insert(function.name.to_string());
+                }
+                Stmt::ClassDef(class) => {
+                    names.insert(class.name.to_string());
+                }
+                Stmt::Import(statement) => {
+                    for alias in &statement.names {
+                        let bound = alias
+                            .asname
+                            .as_ref()
+                            .map(|name| name.as_str())
+                            .unwrap_or_else(|| alias.name.as_str().split('.').next().unwrap_or(""));
+                        if !bound.is_empty() {
+                            names.insert(bound.to_string());
+                        }
+                    }
+                }
+                Stmt::ImportFrom(statement) => {
+                    for alias in &statement.names {
+                        if alias.name.as_str() == "*" {
+                            continue;
+                        }
+                        let bound = alias
+                            .asname
+                            .as_ref()
+                            .map(|name| name.as_str())
+                            .unwrap_or(alias.name.as_str());
+                        names.insert(bound.to_string());
+                    }
+                }
+                Stmt::If(statement) => {
+                    collect_conditional_names(&statement.body, names);
+                    for clause in &statement.elif_else_clauses {
+                        collect_conditional_names(&clause.body, names);
+                    }
+                }
+                Stmt::Try(statement) => {
+                    collect_conditional_names(&statement.body, names);
+                    collect_conditional_names(&statement.orelse, names);
+                    collect_conditional_names(&statement.finalbody, names);
+                    for handler in &statement.handlers {
+                        let ruff_python_ast::ExceptHandler::ExceptHandler(handler) = handler;
+                        collect_conditional_names(&handler.body, names);
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    collect_conditional_names(&module.body, &mut module_level_names);
 
     ModuleAnalysis {
         syntax_errors,
@@ -349,12 +419,31 @@ pub fn resolve_project(fs: &FileSet, project_dir: &str) -> ProjectScan {
 
         // One-hop re-export: __init__.py exporting an app from a sibling.
         if attribute.is_none() && rel_file.ends_with("__init__.py") {
-            for (exported, source_module, source_attr) in &analysis.reexports {
+            for (exported, source_module, source_attr, level) in &analysis.reexports {
                 let pkg_dir = in_project.strip_suffix("/__init__.py").unwrap_or("");
-                let source_file = join(
-                    &join(project_dir, pkg_dir),
-                    &format!("{}.py", source_module.replace('.', "/")),
-                );
+                let source_file = if *level == 1 {
+                    join(
+                        &join(project_dir, pkg_dir),
+                        &format!("{}.py", source_module.replace('.', "/")),
+                    )
+                } else {
+                    let (import_base, package_dir) =
+                        if let Some(package_dir) = pkg_dir.strip_prefix("src/") {
+                            (join(project_dir, "src"), package_dir)
+                        } else {
+                            (project_dir.to_string(), pkg_dir)
+                        };
+                    let package_name = package_dir.split('/').next().unwrap_or(package_dir);
+                    if source_module != package_name
+                        && !source_module.starts_with(&format!("{package_name}."))
+                    {
+                        continue;
+                    }
+                    join(
+                        &import_base,
+                        &format!("{}.py", source_module.replace('.', "/")),
+                    )
+                };
                 if let Some(src) = fs.read_str(&source_file) {
                     let inner = analyze_module(&src);
                     if inner.instance_bindings.iter().any(|b| b == source_attr) {
@@ -466,7 +555,11 @@ pub fn resolve_project(fs: &FileSet, project_dir: &str) -> ProjectScan {
         }
     }
     for base in ["", "src"] {
-        let base_dir = join(project_dir, base);
+        let base_dir = if base.is_empty() {
+            project_dir.to_string()
+        } else {
+            join(project_dir, base)
+        };
         let base_dir = if base_dir == "." {
             String::new()
         } else {
@@ -558,10 +651,17 @@ pub fn validate_entrypoint(
     let Some((module, attribute)) = spec.split_once(':') else {
         return Err(vec![diag::kb503(spec)]);
     };
+    if !module.split('.').all(is_python_identifier) || !is_python_identifier(attribute) {
+        return Err(vec![diag::kb503(spec)]);
+    }
     let module_rel = module.replace('.', "/");
     let mut found = None;
     for root in ["", "src"] {
-        let base = join(project_dir, root);
+        let base = if root.is_empty() {
+            project_dir.to_string()
+        } else {
+            join(project_dir, root)
+        };
         let base = if base == "." { String::new() } else { base };
         for suffix in [
             format!("{module_rel}.py"),
@@ -604,15 +704,7 @@ pub fn validate_entrypoint(
     let is_instance = analysis.instance_bindings.iter().any(|b| b == attribute);
     let is_factory = analysis.factories.iter().any(|f| f == attribute);
     if !is_instance && !is_factory {
-        diags.push(diag::new(
-            "KB505",
-            diag::WARNING,
-            format!(
-                "entrypoint attribute `{attribute}` exists but does not look like an app object"
-            ),
-            Some(file.clone()),
-            None,
-        ));
+        diags.push(diag::kb505(&file, attribute));
     }
     Ok(Resolution {
         file: file.clone(),
@@ -629,4 +721,13 @@ pub fn validate_entrypoint(
         }],
         diagnostics: diags,
     })
+}
+
+fn is_python_identifier(value: &str) -> bool {
+    let mut characters = value.chars();
+    let Some(first) = characters.next() else {
+        return false;
+    };
+    (first == '_' || first.is_alphabetic())
+        && characters.all(|character| character == '_' || character.is_alphanumeric())
 }

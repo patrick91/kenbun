@@ -2,6 +2,8 @@
 
 from pathlib import Path
 
+import pytest
+
 import kenbun
 
 
@@ -363,6 +365,47 @@ def test_python_version_conflict_kb700(tmp_path: Path) -> None:
     assert "KB700" in codes(result)
 
 
+def test_python_tool_versions_are_inherited_and_preserve_sources(
+    tmp_path: Path,
+) -> None:
+    make(
+        tmp_path,
+        {
+            ".tool-versions": "python 3.13.2 3.12.9\nnodejs 22.14.0\n",
+            "apps/api/pyproject.toml": (
+                '[project]\nname = "api"\nrequires-python = ">=3.12"\n'
+                'dependencies = ["fastapi"]\n'
+            ),
+            "apps/api/.python-version": "3.13.3\n",
+            "apps/api/main.py": APP_MAIN,
+        },
+    )
+    application = app(kenbun.scan(tmp_path), "apps/api")
+    assert {(pin.source, pin.value) for pin in application.python.version_pins} == {
+        (".tool-versions", "3.12.9"),
+        (".tool-versions", "3.13.2"),
+        ("apps/api/.python-version", "3.13.3"),
+    }
+    assert "KB700" not in codes(kenbun.scan(tmp_path))
+
+
+def test_python_tool_version_conflicts_with_requires_python(tmp_path: Path) -> None:
+    make(
+        tmp_path,
+        {
+            ".tool-versions": "python 3.11.9\n",
+            "pyproject.toml": (
+                '[project]\nname = "x"\nrequires-python = ">=3.12"\n'
+                'dependencies = ["fastapi"]\n'
+            ),
+            "main.py": APP_MAIN,
+        },
+    )
+    result = kenbun.scan(tmp_path)
+    diagnostic = next(item for item in result.diagnostics if item.code == "KB700")
+    assert ".tool-versions pins 3.11.9" in diagnostic.message
+
+
 def test_uv_lock_resolved_versions(tmp_path: Path) -> None:
     make(
         tmp_path,
@@ -480,6 +523,7 @@ def test_to_json_shape(tmp_path: Path) -> None:
     assert data["schema_version"] == 1
     assert data["applications"][0]["application_dir"] == "."
     assert data["applications"][0]["entrypoint"]["as_string"] == "main:app"
+    assert data["applications"][0]["node"] is None
     assert [item["name"] for item in data["applications"][0]["technologies"]] == [
         "fastapi",
         "python",
@@ -581,3 +625,298 @@ def test_extra_ignore_files_matches_upload_set(tmp_path: Path) -> None:
     honored = kenbun.scan(tmp_path, extra_ignore_files=[".fastapicloudignore"])
     assert app(honored).entrypoint is None
     assert "KB103" in codes(honored)
+
+
+def test_workspace_member_hints_are_relative_to_caller_root(tmp_path: Path) -> None:
+    root = workspace_fixture(tmp_path)
+    result = kenbun.scan(
+        root / "apps" / "api",
+        application_dir=".",
+        entrypoint="app.main:app",
+    )
+    application = app(result, "apps/api")
+    assert application.entrypoint.as_string == "app.main:app"
+    assert application.entrypoint.source == "hint"
+    assert "KB502" not in codes(result)
+
+
+def test_requirement_groups_preserve_exact_include_group_keys(tmp_path: Path) -> None:
+    make(
+        tmp_path,
+        {
+            "pyproject.toml": (
+                '[project]\nname = "x"\ndependencies = []\n'
+                "[dependency-groups]\n"
+                'Web_API = ["fastapi"]\n'
+                'production = [{include-group = "Web_API"}]\n'
+            ),
+            "main.py": APP_MAIN,
+        },
+    )
+    declared = dependencies(app(kenbun.scan(tmp_path))).declared
+    assert [item.name for item in declared].count("fastapi") == 2
+
+
+def test_requirements_include_is_not_double_counted(tmp_path: Path) -> None:
+    make(
+        tmp_path,
+        {
+            "requirements.txt": "-r requirements/base.txt\nuvicorn\n",
+            "requirements/base.txt": "fastapi\n",
+            "main.py": APP_MAIN,
+        },
+    )
+    declared = dependencies(app(kenbun.scan(tmp_path))).declared
+    assert [item.name for item in declared] == ["fastapi", "uvicorn"]
+
+
+def test_bare_requirement_urls_do_not_fake_frameworks(tmp_path: Path) -> None:
+    make(
+        tmp_path,
+        {
+            "requirements.txt": (
+                "https://example.invalid/fastapi.whl\n"
+                "git+https://example.invalid/fastapi.git\n"
+                "httpx @ https://example.invalid/httpx.whl\n"
+            ),
+        },
+    )
+    result = kenbun.scan(tmp_path)
+    assert result.applications == []
+
+
+def test_application_dir_name_tokens_do_not_make_main_requirements_dev(
+    tmp_path: Path,
+) -> None:
+    root = tmp_path / "devportal"
+    make(root, {"requirements.txt": "fastapi\n", "main.py": APP_MAIN})
+    result = kenbun.scan(root)
+    assert "KB301" not in codes(result)
+    assert "KB307" not in codes(result)
+
+
+def test_rule4_package_discovery_under_subdirectory(tmp_path: Path) -> None:
+    make(
+        tmp_path,
+        {
+            "api/pyproject.toml": FASTAPI_PYPROJECT,
+            "api/service/__init__.py": "",
+            "api/service/main.py": APP_MAIN,
+        },
+    )
+    application = app(kenbun.scan(tmp_path), "api")
+    assert application.entrypoint.as_string == "service.main:app"
+
+
+def test_entrypoint_accepts_conditional_binding_and_rejects_invalid_modules(
+    tmp_path: Path,
+) -> None:
+    make(
+        tmp_path,
+        {
+            "pyproject.toml": FASTAPI_PYPROJECT,
+            "main.py": "if True:\n    app = object()\n",
+        },
+    )
+    accepted = kenbun.scan(tmp_path, entrypoint="main:app")
+    assert app(accepted).entrypoint.as_string == "main:app"
+    assert "KB504" not in codes(accepted)
+
+    for invalid in ["bad-path:app", "bad/path:app", "main:bad-name"]:
+        assert "KB503" in codes(kenbun.scan(tmp_path, entrypoint=invalid))
+
+
+def test_absolute_self_reexport_is_resolved(tmp_path: Path) -> None:
+    make(
+        tmp_path,
+        {
+            "pyproject.toml": FASTAPI_PYPROJECT,
+            "backend/__init__.py": "from backend.server import app\n",
+            "backend/server.py": APP_MAIN,
+        },
+    )
+    application = app(kenbun.scan(tmp_path))
+    assert application.entrypoint.as_string == "backend:app"
+
+
+def test_pep723_inline_script_dependencies(tmp_path: Path) -> None:
+    make(
+        tmp_path,
+        {
+            "main.py": (
+                "# /// script\n"
+                '# requires-python = ">=3.12"\n'
+                '# dependencies = ["fastapi", "uvicorn"]\n'
+                "# ///\n" + APP_MAIN
+            ),
+        },
+    )
+    application = app(kenbun.scan(tmp_path))
+    assert {item.name for item in dependencies(application).declared} == {
+        "fastapi",
+        "uvicorn",
+    }
+    assert application.python.requires_python == ">=3.12"
+
+
+def test_legacy_pdm_dependencies_are_parsed(tmp_path: Path) -> None:
+    make(
+        tmp_path,
+        {
+            "pyproject.toml": (
+                '[tool.pdm]\ndependencies = ["fastapi", "uvicorn"]\n'
+                '[tool.pdm.dev-dependencies]\ntest = ["pytest"]\n'
+            ),
+            "main.py": APP_MAIN,
+        },
+    )
+    application = app(kenbun.scan(tmp_path))
+    assert {item.name for item in dependencies(application).declared} == {
+        "fastapi",
+        "pytest",
+        "uvicorn",
+    }
+
+
+def test_ignore_file_is_not_an_implicit_scan_exclusion(tmp_path: Path) -> None:
+    make(
+        tmp_path,
+        {
+            ".ignore": "main.py\n",
+            "requirements.txt": "fastapi\n",
+            "main.py": APP_MAIN,
+        },
+    )
+    assert app(kenbun.scan(tmp_path)).entrypoint.as_string == "main:app"
+
+
+def test_invalid_roots_have_a_filesystem_diagnostic(tmp_path: Path) -> None:
+    missing = kenbun.scan(tmp_path / "missing")
+    assert "KB800" in codes(missing)
+
+    regular_file = tmp_path / "file.txt"
+    regular_file.write_text("not a directory")
+    assert "KB800" in codes(kenbun.scan(regular_file))
+
+
+def test_unavailable_pyproject_is_diagnostic(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_bytes(b"x" * (2 * 1024 * 1024 + 1))
+    result = kenbun.scan(tmp_path)
+    assert "KB801" in codes(result)
+
+
+def test_distinct_diagnostic_messages_at_same_location_are_preserved(
+    tmp_path: Path,
+) -> None:
+    make(
+        tmp_path,
+        {
+            "package.json": '{"workspaces": ["apps/*", "packages/*"]}',
+        },
+    )
+    kb402 = [item for item in kenbun.scan(tmp_path).diagnostics if item.code == "KB402"]
+    assert len(kb402) == 2
+
+
+def test_scan_budget_and_external_symlink_are_bounded(tmp_path: Path) -> None:
+    make(
+        tmp_path,
+        {
+            "requirements.txt": "fastapi\n",
+            "main.py": APP_MAIN,
+            "extra.py": "pass\n",
+        },
+    )
+    assert "KB802" in codes(kenbun.scan(tmp_path, max_files=1))
+
+    outside = tmp_path.parent / f"{tmp_path.name}-outside.txt"
+    outside.write_text("secret-framework-name\n")
+    try:
+        (tmp_path / "outside.txt").symlink_to(outside)
+    except OSError:
+        pytest.skip("symlinks unavailable")
+    payload = kenbun.scan(tmp_path, follow_symlinks=True).to_json()
+    assert "secret-framework-name" not in payload
+
+
+@pytest.mark.parametrize("dependency", ["django", "flask"])
+def test_identity_frameworks_have_coverage(tmp_path: Path, dependency: str) -> None:
+    make(
+        tmp_path,
+        {
+            "pyproject.toml": (
+                f'[project]\nname = "x"\ndependencies = ["{dependency}"]\n'
+            ),
+        },
+    )
+    assert technology(app(kenbun.scan(tmp_path)), dependency).role == "primary"
+
+
+def test_manage_py_detects_django_without_dependency(tmp_path: Path) -> None:
+    make(
+        tmp_path,
+        {
+            "manage.py": (
+                "import os\n"
+                'os.environ.setdefault("DJANGO_SETTINGS_MODULE", "demo.settings")\n'
+            ),
+        },
+    )
+    assert technology(app(kenbun.scan(tmp_path)), "django").role == "primary"
+
+
+def test_remaining_diagnostic_codes_have_regression_coverage(tmp_path: Path) -> None:
+    router = tmp_path / "router"
+    make(
+        router,
+        {
+            "pyproject.toml": FASTAPI_PYPROJECT,
+            "main.py": "from fastapi import APIRouter\nrouter = APIRouter()\n",
+        },
+    )
+    assert "KB104" in codes(kenbun.scan(router))
+
+    malformed = tmp_path / "malformed"
+    make(malformed, {"pyproject.toml": "[project\n"})
+    assert "KB201" in codes(kenbun.scan(malformed))
+
+    tableless = tmp_path / "tableless"
+    make(tableless, {"pyproject.toml": '[tool.demo]\nname = "x"\n'})
+    assert "KB202" in codes(kenbun.scan(tableless))
+
+    locks = tmp_path / "locks"
+    make(
+        locks,
+        {
+            "pyproject.toml": FASTAPI_PYPROJECT,
+            "main.py": APP_MAIN,
+            "uv.lock": "version = 1\n",
+            "pdm.lock": "",
+        },
+    )
+    assert "KB305" in codes(kenbun.scan(locks))
+
+    workspace = tmp_path / "workspace"
+    make(
+        workspace,
+        {
+            "pyproject.toml": '[tool.uv.workspace]\nmembers = ["apps/*"]\n',
+            "apps/missing/README.md": "missing manifest\n",
+            "apps/nested/pyproject.toml": (
+                '[tool.uv.workspace]\nmembers = ["packages/*"]\n'
+            ),
+        },
+    )
+    workspace_codes = codes(kenbun.scan(workspace))
+    assert "KB400" in workspace_codes
+    assert "KB401" in workspace_codes
+
+    hinted = tmp_path / "hinted"
+    make(
+        hinted,
+        {
+            "pyproject.toml": FASTAPI_PYPROJECT,
+            "main.py": "app = object()\n",
+        },
+    )
+    assert "KB505" in codes(kenbun.scan(hinted, entrypoint="main:app"))

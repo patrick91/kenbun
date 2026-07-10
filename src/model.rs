@@ -5,7 +5,7 @@ use serde::Serialize;
 
 pub const SCHEMA_VERSION: u32 = 1;
 
-#[pyclass(get_all, frozen)]
+#[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
 pub struct Span {
     pub start_line: u32,
@@ -14,7 +14,7 @@ pub struct Span {
     pub end_col: u32,
 }
 
-#[pyclass(get_all, frozen)]
+#[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
 pub struct Diagnostic {
     pub code: String,
@@ -24,7 +24,7 @@ pub struct Diagnostic {
     pub span: Option<Span>,
 }
 
-#[pyclass(get_all, frozen)]
+#[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
 pub struct Evidence {
     pub kind: String,
@@ -33,7 +33,7 @@ pub struct Evidence {
     pub detail: String,
 }
 
-#[pyclass(get_all, frozen)]
+#[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
 pub struct Entrypoint {
     pub kind: String,
@@ -45,7 +45,7 @@ pub struct Entrypoint {
     pub as_string: String,
 }
 
-#[pyclass(get_all, frozen)]
+#[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
 pub struct EnvVar {
     pub names: Vec<String>,
@@ -61,14 +61,14 @@ pub struct EnvVar {
     pub confidence: String,
 }
 
-#[pyclass(get_all, frozen)]
+#[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
 pub struct SourceRef {
     pub path: String,
     pub span: Option<Span>,
 }
 
-#[pyclass(get_all, frozen)]
+#[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
 pub struct DeclaredDep {
     pub name: String,
@@ -80,7 +80,7 @@ pub struct DeclaredDep {
     pub source: SourceRef,
 }
 
-#[pyclass(get_all, frozen)]
+#[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
 pub struct ResolvedDep {
     pub name: String,
@@ -89,14 +89,14 @@ pub struct ResolvedDep {
     pub marker: Option<String>,
 }
 
-#[pyclass(get_all, frozen)]
+#[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
 pub struct ManifestRef {
     pub path: String,
     pub kind: String,
 }
 
-#[pyclass(get_all, frozen)]
+#[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
 pub struct LockfileRef {
     pub path: String,
@@ -104,7 +104,7 @@ pub struct LockfileRef {
     pub parsed: bool,
 }
 
-#[pyclass(get_all, frozen)]
+#[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
 pub struct DependencySet {
     pub ecosystem: String,
@@ -115,7 +115,7 @@ pub struct DependencySet {
     pub resolved: Vec<ResolvedDep>,
 }
 
-#[pyclass(get_all, frozen)]
+#[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
 pub struct Technology {
     pub name: String,
@@ -125,7 +125,7 @@ pub struct Technology {
     pub evidence: Vec<Evidence>,
 }
 
-#[pyclass(get_all, frozen)]
+#[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
 pub struct BuildScript {
     pub name: String,
@@ -135,17 +135,24 @@ pub struct BuildScript {
     pub source: SourceRef,
 }
 
-#[pyclass(get_all, frozen)]
+#[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
 pub struct VersionPin {
     pub source: String,
     pub value: String,
 }
 
-#[pyclass(get_all, frozen)]
+#[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
 pub struct PythonInfo {
     pub requires_python: Option<String>,
+    pub version_pins: Vec<VersionPin>,
+}
+
+#[pyclass(get_all, frozen, skip_from_py_object)]
+#[derive(Clone, Debug, Serialize)]
+pub struct NodeInfo {
+    pub requires_node: Option<String>,
     pub version_pins: Vec<VersionPin>,
 }
 
@@ -172,7 +179,7 @@ pub(crate) struct Project {
     pub diagnostics: Vec<Diagnostic>,
 }
 
-#[pyclass(get_all, frozen)]
+#[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
 pub struct Application {
     pub application_dir: String,
@@ -183,11 +190,12 @@ pub struct Application {
     pub build_scripts: Vec<BuildScript>,
     pub env_vars: Vec<EnvVar>,
     pub python: Option<PythonInfo>,
+    pub node: Option<NodeInfo>,
     pub evidence: Vec<Evidence>,
     pub diagnostics: Vec<Diagnostic>,
 }
 
-#[pyclass(get_all, frozen)]
+#[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
 pub struct Workspace {
     pub kind: String,
@@ -196,7 +204,7 @@ pub struct Workspace {
     pub members: Vec<String>,
 }
 
-#[pyclass(get_all, frozen)]
+#[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
 pub struct ScanResult {
     pub schema_version: u32,

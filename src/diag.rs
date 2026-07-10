@@ -289,6 +289,16 @@ pub fn kb504(entrypoint: &str) -> Diagnostic {
     )
 }
 
+pub fn kb505(path: &str, attribute: &str) -> Diagnostic {
+    new(
+        "KB505",
+        WARNING,
+        format!("entrypoint attribute `{attribute}` exists but does not look like an app object"),
+        Some(path.to_string()),
+        None,
+    )
+}
+
 pub fn kb700(path: &str, detail: &str) -> Diagnostic {
     new(
         "KB700",
@@ -305,6 +315,26 @@ pub fn kb802(limit: u64) -> Diagnostic {
         WARNING,
         format!("scan budget exceeded (max_files={limit}); result is partial"),
         None,
+        None,
+    )
+}
+
+pub fn kb800(path: &str, message: &str) -> Diagnostic {
+    new(
+        "KB800",
+        ERROR,
+        format!("scan root is unavailable: {message}"),
+        Some(path.to_string()),
+        None,
+    )
+}
+
+pub fn kb801(path: &str, message: &str) -> Diagnostic {
+    new(
+        "KB801",
+        WARNING,
+        format!("filesystem entry was omitted: {message}"),
+        Some(path.to_string()),
         None,
     )
 }

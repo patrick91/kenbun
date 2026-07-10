@@ -100,6 +100,10 @@ class PythonInfo:
     requires_python: str | None
     version_pins: list[VersionPin]
 
+class NodeInfo:
+    requires_node: str | None
+    version_pins: list[VersionPin]
+
 class Application:
     application_dir: str
     name: str | None
@@ -109,6 +113,7 @@ class Application:
     build_scripts: list[BuildScript]
     env_vars: list[EnvVar]
     python: PythonInfo | None
+    node: NodeInfo | None
     evidence: list[Evidence]
     diagnostics: list[Diagnostic]
 

@@ -35,6 +35,9 @@ build-backend = "maturin"
 features = ["pyo3/extension-module"]
 python-source = "src"
 module-name = "kenbun._kenbun"
+include = [
+    {path = "kenbun/THIRD-PARTY-LICENSES.md", format = ["sdist", "wheel"]},
+]
 
 [tool.autopub]
 git-username = "github-actions[bot]"

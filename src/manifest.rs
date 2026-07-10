@@ -1,6 +1,6 @@
 //! Static Python manifest and dependency parsing.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Deserialize;
 
@@ -127,7 +127,7 @@ pub fn pyproject_deps(pp: &PyProject, path: &str) -> Vec<DeclaredDep> {
                         }
                         toml::Value::Table(t) => {
                             if let Some(toml::Value::String(inc)) = t.get("include-group") {
-                                stack.push(normalize_name(inc));
+                                stack.push(inc.clone());
                             }
                         }
                         _ => {}
@@ -179,19 +179,65 @@ pub fn pyproject_deps(pp: &PyProject, path: &str) -> Vec<DeclaredDep> {
         }
     }
 
+    // Legacy PDM metadata. Modern PDM uses PEP 621 `[project]`, handled above.
+    if let Some(toml::Value::Table(pdm)) = pp.tool.as_ref().and_then(|tool| tool.pdm.as_ref()) {
+        if let Some(toml::Value::Array(dependencies)) = pdm.get("dependencies") {
+            for raw in dependencies.iter().filter_map(toml::Value::as_str) {
+                out.extend(declared(raw, "project", path));
+            }
+        }
+        if let Some(toml::Value::Table(groups)) = pdm.get("dev-dependencies") {
+            for (group, dependencies) in groups {
+                if let toml::Value::Array(dependencies) = dependencies {
+                    for raw in dependencies.iter().filter_map(toml::Value::as_str) {
+                        out.extend(declared(raw, &format!("pdm:group:{group}"), path));
+                    }
+                }
+            }
+        }
+    }
+
     out
 }
 
-/// requirements.txt with recursive `-r` includes, bounded to depth five.
-pub fn requirements_deps(fs: &FileSet, rel_path: &str, depth: u8, out: &mut Vec<DeclaredDep>) {
+/// requirements.txt with recursive `-r` includes. Each logical file is parsed
+/// at most once per collection, so include cycles and fan-out cannot amplify
+/// the output exponentially.
+#[cfg(test)]
+fn requirements_deps(fs: &FileSet, rel_path: &str, depth: u8, out: &mut Vec<DeclaredDep>) {
+    let mut visited = BTreeSet::new();
+    requirements_deps_inner(fs, rel_path, depth, out, &mut visited);
+}
+
+/// Collect all requirements files belonging to one project with a shared
+/// include guard. `project_files` discovers included files too; sharing the
+/// guard prevents those files from being counted again as standalone roots.
+pub fn requirements_project_deps(fs: &FileSet, rel_paths: &[String], out: &mut Vec<DeclaredDep>) {
+    let mut visited = BTreeSet::new();
+    for rel_path in rel_paths {
+        requirements_deps_inner(fs, rel_path, 0, out, &mut visited);
+    }
+}
+
+fn requirements_deps_inner(
+    fs: &FileSet,
+    rel_path: &str,
+    depth: u8,
+    out: &mut Vec<DeclaredDep>,
+    visited: &mut BTreeSet<String>,
+) {
     if depth > 5 {
         return;
     }
-    let Some(source) = fs.read_str(rel_path) else {
+    let rel_path = normalize_rel(rel_path);
+    if !visited.insert(rel_path.clone()) {
+        return;
+    }
+    let Some(source) = fs.read_str(&rel_path) else {
         return;
     };
     let dir = rel_path.rsplit_once('/').map(|(d, _)| d).unwrap_or("");
-    let group = if is_dev_requirements(rel_path) {
+    let group = if is_dev_requirements(&rel_path) {
         format!("group:{rel_path}")
     } else {
         "project".to_string()
@@ -214,26 +260,28 @@ pub fn requirements_deps(fs: &FileSet, rel_path: &str, depth: u8, out: &mut Vec<
             } else {
                 format!("{dir}/{included}")
             };
-            requirements_deps(fs, &normalize_rel(&joined_path), depth + 1, out);
+            requirements_deps_inner(fs, &joined_path, depth + 1, out, visited);
             continue;
         }
         if line.starts_with('-') {
             // -e, -c, --hash, --index-url…: name only via #egg= fragment
             if let Some(egg) = line.split("#egg=").nth(1) {
                 let name = egg.split(&['&', ' '][..]).next().unwrap_or(egg);
-                out.extend(declared(name, &group, rel_path));
+                out.extend(declared(name, &group, &rel_path));
             }
             continue;
         }
-        out.extend(declared(line, &group, rel_path));
+        out.extend(declared(line, &group, &rel_path));
     }
 }
 
 fn is_dev_requirements(path: &str) -> bool {
-    let lower = path.to_ascii_lowercase();
-    ["dev", "test", "lint", "doc"]
-        .iter()
-        .any(|k| lower.contains(k))
+    path.rsplit('/')
+        .next()
+        .unwrap_or(path)
+        .to_ascii_lowercase()
+        .split(|character: char| !character.is_ascii_alphanumeric())
+        .any(|part| matches!(part, "dev" | "test" | "tests" | "lint" | "doc" | "docs"))
 }
 
 fn normalize_rel(path: &str) -> String {
@@ -319,6 +367,45 @@ pub fn setup_py_framework_mentions(source: &str) -> Vec<String> {
     found.into_iter().collect()
 }
 
+/// PEP 723 inline script metadata, parsed as TOML without executing the script.
+pub fn inline_script_deps(source: &str, path: &str) -> (Vec<DeclaredDep>, Option<String>) {
+    let mut in_block = false;
+    let mut metadata = String::new();
+    for line in source.lines() {
+        if !in_block {
+            if line.trim() == "# /// script" {
+                in_block = true;
+            }
+            continue;
+        }
+        if line.trim() == "# ///" {
+            break;
+        }
+        let Some(content) = line.trim_start().strip_prefix('#') else {
+            return (Vec::new(), None);
+        };
+        metadata.push_str(content.strip_prefix(' ').unwrap_or(content));
+        metadata.push('\n');
+    }
+    if !in_block {
+        return (Vec::new(), None);
+    }
+    let Ok(table) = metadata.parse::<toml::Table>() else {
+        return (Vec::new(), None);
+    };
+    let mut dependencies = Vec::new();
+    if let Some(toml::Value::Array(values)) = table.get("dependencies") {
+        for raw in values.iter().filter_map(toml::Value::as_str) {
+            dependencies.extend(declared(raw, "project", path));
+        }
+    }
+    let requires_python = table
+        .get("requires-python")
+        .and_then(toml::Value::as_str)
+        .map(str::to_string);
+    (dependencies, requires_python)
+}
+
 /// Names recorded in uv.lock (for the conservative KB302 check and Layer 1).
 #[allow(dead_code)] // M2: KB302 drift check
 pub fn lock_package_names(resolved: &[ResolvedDep]) -> std::collections::BTreeSet<String> {
@@ -332,6 +419,7 @@ pub struct ProjectFiles {
     pub manifests: Vec<ManifestRef>,
     pub lockfiles: Vec<LockfileRef>,
     pub requirements: Vec<String>,
+    pub inline_scripts: Vec<String>,
 }
 
 pub fn project_files(fs: &FileSet, dir: &str) -> ProjectFiles {
@@ -346,6 +434,7 @@ pub fn project_files(fs: &FileSet, dir: &str) -> ProjectFiles {
     let mut lockfiles = Vec::new();
     let mut requirements = Vec::new();
     let mut pyproject = None;
+    let mut inline_scripts = Vec::new();
 
     let pp = join("pyproject.toml");
     if fs.contains(&pp) {
@@ -389,6 +478,25 @@ pub fn project_files(fs: &FileSet, dir: &str) -> ProjectFiles {
             requirements.push(path.to_string());
         }
     }
+    for path in fs.under(dir) {
+        let rel_in_dir = if dir.is_empty() {
+            path
+        } else {
+            &path[dir.len() + 1..]
+        };
+        if !rel_in_dir.contains('/')
+            && rel_in_dir.ends_with(".py")
+            && fs
+                .read_str(path)
+                .is_some_and(|source| source.lines().any(|line| line.trim() == "# /// script"))
+        {
+            manifests.push(ManifestRef {
+                path: path.to_string(),
+                kind: "inline-script".to_string(),
+            });
+            inline_scripts.push(path.to_string());
+        }
+    }
     for (file, kind) in [
         ("uv.lock", "uv"),
         ("pylock.toml", "pylock"),
@@ -413,6 +521,7 @@ pub fn project_files(fs: &FileSet, dir: &str) -> ProjectFiles {
         manifests,
         lockfiles,
         requirements,
+        inline_scripts,
     }
 }
 
@@ -423,5 +532,64 @@ pub fn framework_for(name: &str) -> Option<&'static str> {
         "django" => Some("django"),
         "flask" => Some("flask"),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    fn requirements_fixture(files: &[(&str, &str)]) -> FileSet {
+        static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
+        let suffix = NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed);
+        let root = std::env::temp_dir().join(format!(
+            "kenbun-manifest-requirements-{}-{suffix}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&root).expect("create fixture");
+        for (path, source) in files {
+            let target = root.join(path);
+            if let Some(parent) = target.parent() {
+                std::fs::create_dir_all(parent).expect("create fixture parent");
+            }
+            std::fs::write(target, source).expect("write fixture");
+        }
+        crate::fileset::walk_fs(&root, None, false, &[])
+    }
+
+    #[test]
+    fn requirements_self_include_is_parsed_once() {
+        let fs = requirements_fixture(&[(
+            "requirements.txt",
+            "-r requirements.txt\n-r requirements.txt\nfastapi\n",
+        )]);
+        let mut dependencies = Vec::new();
+        requirements_deps(&fs, "requirements.txt", 0, &mut dependencies);
+        assert_eq!(dependencies.len(), 1);
+        assert_eq!(dependencies[0].name, "fastapi");
+    }
+
+    #[test]
+    fn requirements_collection_deduplicates_included_files() {
+        let fs = requirements_fixture(&[
+            ("requirements.txt", "-r requirements/base.txt\nuvicorn\n"),
+            ("requirements/base.txt", "fastapi\n"),
+        ]);
+        let paths = vec![
+            "requirements.txt".to_string(),
+            "requirements/base.txt".to_string(),
+        ];
+        let mut dependencies = Vec::new();
+        requirements_project_deps(&fs, &paths, &mut dependencies);
+        assert_eq!(dependencies.len(), 2);
+    }
+
+    #[test]
+    fn dev_requirements_match_path_tokens_not_parent_substrings() {
+        assert!(!is_dev_requirements("devportal/requirements.txt"));
+        assert!(!is_dev_requirements("docs-site/requirements.txt"));
+        assert!(is_dev_requirements("requirements/dev.txt"));
+        assert!(is_dev_requirements("requirements-test.txt"));
     }
 }

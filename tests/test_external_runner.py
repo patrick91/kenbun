@@ -72,6 +72,7 @@ def test_safe_extract_rejects_links(tmp_path: Path) -> None:
     with tarfile.open(archive, "w:gz") as bundle:
         directory = tarfile.TarInfo("fixture")
         directory.type = tarfile.DIRTYPE
+        directory.mode = 0o755
         bundle.addfile(directory)
         link = tarfile.TarInfo("fixture/link")
         link.type = tarfile.SYMTYPE
@@ -94,5 +95,27 @@ def test_safe_extract_accepts_regular_archive(tmp_path: Path) -> None:
         file.mode = 0o644
         file.size = len(content)
         bundle.addfile(file, io.BytesIO(content))
+    root = runner.safe_extract(archive, tmp_path / "extracted")
+    assert (root / "README.md").read_bytes() == content
+
+
+def test_safe_extract_replaces_incomplete_cached_directory(tmp_path: Path) -> None:
+    runner = load_runner()
+    archive = tmp_path / "fixture.tar.gz"
+    content = b"fresh\n"
+    with tarfile.open(archive, "w:gz") as bundle:
+        directory = tarfile.TarInfo("fixture")
+        directory.type = tarfile.DIRTYPE
+        directory.mode = 0o755
+        bundle.addfile(directory)
+        file = tarfile.TarInfo("fixture/README.md")
+        file.mode = 0o644
+        file.size = len(content)
+        bundle.addfile(file, io.BytesIO(content))
+
+    stale_root = tmp_path / "extracted" / "fixture"
+    stale_root.mkdir(parents=True)
+    (stale_root / "README.md").write_text("stale\n")
+
     root = runner.safe_extract(archive, tmp_path / "extracted")
     assert (root / "README.md").read_bytes() == content

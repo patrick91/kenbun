@@ -3,7 +3,7 @@
 use std::path::{Path, PathBuf};
 
 use crate::diag;
-use crate::fileset::FileSet;
+use crate::fileset::{read_bounded_path, FileSet};
 use crate::manifest::{parse_pyproject, UvWorkspace};
 use crate::model::{Diagnostic, Workspace};
 use crate::node;
@@ -26,6 +26,10 @@ pub fn discover_upward(scan_root: &Path) -> EffectiveRoot {
         upload_root: ".".into(),
         scan_origin: ".".into(),
     };
+
+    if !scan_root.is_dir() {
+        return same;
+    }
 
     // If the scan root itself is a workspace root, nothing to discover.
     if let Some(ws) = read_workspace_table(&scan_root.join("pyproject.toml")) {
@@ -75,7 +79,7 @@ pub fn discover_upward(scan_root: &Path) -> EffectiveRoot {
 fn read_node_workspace_patterns(root: &Path) -> Option<Vec<String>> {
     let mut declared = false;
     let mut patterns = Vec::new();
-    if let Ok(source) = std::fs::read_to_string(root.join("package.json")) {
+    if let Some(source) = read_bounded_path(&root.join("package.json")) {
         if let Ok(value) = serde_json::from_str::<serde_json::Value>(&source) {
             if let Some(workspaces) = value.get("workspaces") {
                 declared = true;
@@ -97,7 +101,7 @@ fn read_node_workspace_patterns(root: &Path) -> Option<Vec<String>> {
             }
         }
     }
-    if let Ok(source) = std::fs::read_to_string(root.join("pnpm-workspace.yaml")) {
+    if let Some(source) = read_bounded_path(&root.join("pnpm-workspace.yaml")) {
         declared = true;
         let (pnpm_patterns, _) = node::parse_pnpm_workspace_yaml(&source);
         patterns.extend(pnpm_patterns);
@@ -117,17 +121,17 @@ fn node_member_globs_include(root: &Path, patterns: &[String], rel: &str) -> boo
             let excluded = patterns
                 .iter()
                 .filter_map(|pattern| pattern.strip_prefix('!'))
-                .any(|pattern| glob_matches(pattern, candidate));
+                .any(|pattern| node::workspace_pattern_matches(pattern, candidate));
             !excluded
                 && patterns
                     .iter()
                     .filter(|pattern| !pattern.starts_with('!'))
-                    .any(|pattern| glob_matches(pattern, candidate))
+                    .any(|pattern| node::workspace_pattern_matches(pattern, candidate))
         })
 }
 
 fn read_workspace_table(pyproject: &Path) -> Option<UvWorkspace> {
-    let source = std::fs::read_to_string(pyproject).ok()?;
+    let source = read_bounded_path(pyproject)?;
     let pp = parse_pyproject(&source).ok()?;
     pp.tool.and_then(|t| t.uv).and_then(|u| u.workspace)
 }

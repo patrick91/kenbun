@@ -39,9 +39,10 @@ def scan(
 
 `root` must identify a real directory. Schema v1 has no virtual-file API.
 
-`application_dir` is an optional repository-relative hint supplied by a
-consumer. Kenbun validates that it remains under the effective root, exists,
-and matches a detected application. It does not suppress other
+`application_dir` is an optional path relative to the caller-supplied scan root.
+Kenbun translates it into the effective workspace root, validates that it
+remains under the caller's root, exists, and matches a detected application. It
+does not suppress other
 detected applications or mark the hinted application as selected. When an
 `entrypoint` hint is also provided, it applies to the hinted application; in
 the absence of `application_dir`, it applies to the application containing the
@@ -51,7 +52,9 @@ scan origin.
 by the FastAPI resolver. It is validated against statically parsed source.
 
 `max_files` bounds the filesystem walk. Exceeding it returns the partial facts
-with `KB802`. Symlinks are not followed unless `follow_symlinks=True`.
+with `KB802`. Symlinks are not followed unless `follow_symlinks=True`; when
+enabled, targets outside the scan root are still excluded. `.gitignore` is
+honored, while ripgrep-specific `.ignore` files are not implicit scan inputs.
 `extra_ignore_files` lets a caller apply deployment-specific ignore files in
 addition to the built-in exclusions and `.gitignore`.
 
@@ -84,6 +87,7 @@ Application
 ├─ build_scripts: list[BuildScript]
 ├─ env_vars: list[EnvVar]
 ├─ python: PythonInfo | None
+├─ node: NodeInfo | None
 ├─ evidence: list[Evidence]
 └─ diagnostics: list[Diagnostic]
 
@@ -117,8 +121,12 @@ Workspace
 └─ members: list[str]
 ```
 
-An `Application` may have both Python and Node dependency sets. `python` is
-present only when Python metadata applies. `entrypoint` is optional because
+An `Application` may have both Python and Node dependency sets. `python` and
+`node` are present only when their respective runtime metadata applies. Python
+pins come from the nearest `.python-version` and relevant `.tool-versions`
+entry. Node pins come from the nearest `.node-version`, `.nvmrc`, and relevant
+`.tool-versions` entry; `package.json#engines.node` is retained as the Node
+runtime constraint. `entrypoint` is optional because
 only FastAPI has detailed entrypoint resolution in v1 and because a framework
 can be detected even when its entrypoint is unresolved.
 
@@ -290,10 +298,15 @@ it and does not choose whether a consumer should run it.
 
 Diagnostic codes are stable machine identifiers; severity and message are
 presentation facts. Application diagnostics are also aggregated onto
-`ScanResult.diagnostics`, deduplicated, and sorted. Existing code families
-cover discovery (`KB100`–`KB112`), parsing (`KB200`–`KB203`), dependency consistency
-(`KB300`), workspaces (`KB400`), hints (`KB500`), version conflicts (`KB700`),
-and scan limits (`KB802`).
+`ScanResult.diagnostics`, deduplicated, and sorted. The emitted inventory is:
+
+- discovery: `KB100`, `KB101`, `KB102`, `KB103`, `KB104`, `KB111`, `KB112`;
+- parsing: `KB200`, `KB201`, `KB202`, `KB203`;
+- dependency consistency: `KB300`, `KB301`, `KB305`, `KB306`, `KB307`, `KB308`;
+- workspaces: `KB400`, `KB401`, `KB402`;
+- hints: `KB500`, `KB501`, `KB502`, `KB503`, `KB504`, `KB505`;
+- version conflicts: `KB700`;
+- filesystem and scan limits: `KB800`, `KB801`, `KB802`.
 
 Applications sort by `application_dir`. Technologies, dependency metadata,
 workspace members, evidence, and diagnostics use stable semantic or bytewise

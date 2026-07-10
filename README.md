@@ -78,7 +78,7 @@ kept separate and must independently qualify as an application.
   `applications`, and aggregate diagnostics.
 - `Application` contains `technologies`, optional entrypoint, one or more
   ecosystem-specific `DependencySet` values, explicit `build_scripts`, Python
-  metadata, evidence, and local diagnostics.
+  and Node runtime metadata, evidence, and local diagnostics.
 - `Technology` has a normalized name, kind (`language`, `framework`,
   `ui-framework`, `integration`, or `build-tool`), role (`primary` or
   `supporting`), confidence, and evidence.
@@ -111,4 +111,6 @@ Build the extension and run the tests with:
 ```bash
 uv run maturin develop --uv
 uv run pytest
+cargo test --all-targets --all-features
+cargo deny check
 ```
