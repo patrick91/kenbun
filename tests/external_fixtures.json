@@ -216,6 +216,28 @@
     }
   },
   {
+    "name": "workspace-uv-multi-fastapi",
+    "repository": "test-patrick/kenbun-workspace-multi-fastapi",
+    "revision": "cad7c372c4e8f1cfbfc381fd7cd2c7ac7600d85b",
+    "expected": {
+      "workspace": {"kind": "uv", "path": ".", "virtual_root": true, "members": [".", "apps/admin", "apps/api"]},
+      "applications": [
+        {
+          "application_dir": "apps/admin",
+          "technologies": ["framework:primary:fastapi:high", "language:supporting:python:high"],
+          "entrypoint": "main:app",
+          "dependency_managers": {"python": "uv"}
+        },
+        {
+          "application_dir": "apps/api",
+          "technologies": ["framework:primary:fastapi:high", "language:supporting:python:high"],
+          "entrypoint": "main:app",
+          "dependency_managers": {"python": "uv"}
+        }
+      ]
+    }
+  },
+  {
     "name": "workspace-npm",
     "repository": "test-patrick/kenbun-workspace-npm",
     "revision": "a404bb62b41d4b94dca4a42d9af03b5651b15d07",
