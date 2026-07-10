@@ -88,8 +88,10 @@ def test_safe_extract_accepts_regular_archive(tmp_path: Path) -> None:
     with tarfile.open(archive, "w:gz") as bundle:
         directory = tarfile.TarInfo("fixture")
         directory.type = tarfile.DIRTYPE
+        directory.mode = 0o755
         bundle.addfile(directory)
         file = tarfile.TarInfo("fixture/README.md")
+        file.mode = 0o644
         file.size = len(content)
         bundle.addfile(file, io.BytesIO(content))
     root = runner.safe_extract(archive, tmp_path / "extracted")
