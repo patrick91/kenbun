@@ -52,13 +52,18 @@ directory hint from `target_dir` to `application_dir`.
 
 ## Unreleased
 
+- Add the stateless `analyze()` API for remote inventories, incremental
+  `want_files`, explicit completeness, unavailable contents, and ordered script
+  pattern hints. Remote script probing is manifest-first, so repositories
+  without supported dependency evidence avoid speculative source reads. Schema
+  v2 exposes the protocol directly on `ScanResult`.
 - Replace the Python-project/deploy-target/classification response with the
   schema-v1 `ScanResult.applications` model. Applications expose normalized
   technologies, ecosystem-specific dependency sets, explicit build-script
   facts, entrypoints, evidence, and diagnostics.
 - Rename the `scan()` directory hint from `target_dir` to `application_dir`.
-  Kenbun remains a filesystem-only static analyzer; command selection,
-  recommendations, and deployability policy belong to consumers.
+  Command selection, recommendations, and deployability policy belong to
+  consumers.
 - Add application detection for Django and Flask identity, Next.js, Astro,
   Nuxt, SvelteKit, TanStack Start, React Router Framework Mode, SolidStart,
   legacy Remix, and strict standalone Vite applications while preserving the

@@ -175,10 +175,12 @@ pub(crate) fn discover(fs: &FileSet) -> RawNodeDiscovery {
         let manifest = match fs.read_str(&path) {
             Some(source) => parse_package_json(&path, &source, &mut parse_errors),
             None => {
-                parse_errors.push(raw_error(
-                    &path,
-                    "package.json is unavailable, too large, non-UTF-8, or unreadable",
-                ));
+                if !fs.is_pending(&path) {
+                    parse_errors.push(raw_error(
+                        &path,
+                        "package.json is unavailable, too large, non-UTF-8, or unreadable",
+                    ));
+                }
                 PackageManifest::default()
             }
         };
@@ -223,10 +225,11 @@ pub(crate) fn discover(fs: &FileSet) -> RawNodeDiscovery {
                         .map(|message| raw_error(&path, message)),
                 );
             }
-            None => parse_errors.push(raw_error(
+            None if !fs.is_pending(&path) => parse_errors.push(raw_error(
                 &path,
                 "pnpm-workspace.yaml is unavailable, too large, non-UTF-8, or unreadable",
             )),
+            None => {}
         }
     }
 
@@ -1718,20 +1721,10 @@ catalog:
             std::fs::write(&absolute, source).expect("write fixture file");
             entries.insert((*path).to_string(), source.len() as u64);
         }
-        FileSet {
-            root,
-            files: entries,
-            truncated: false,
-            issues: Vec::new(),
-        }
+        FileSet::test_local(root, entries)
     }
 
     fn unreadable_fileset() -> FileSet {
-        FileSet {
-            root: std::path::PathBuf::new(),
-            files: BTreeMap::new(),
-            truncated: false,
-            issues: Vec::new(),
-        }
+        FileSet::test_local(std::path::PathBuf::new(), BTreeMap::new())
     }
 }

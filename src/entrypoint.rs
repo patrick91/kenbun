@@ -444,6 +444,7 @@ pub fn resolve_project(fs: &FileSet, project_dir: &str) -> ProjectScan {
                         &format!("{}.py", source_module.replace('.', "/")),
                     )
                 };
+                fs.allow_script(source_file.clone());
                 if let Some(src) = fs.read_str(&source_file) {
                     let inner = analyze_module(&src);
                     if inner.instance_bindings.iter().any(|b| b == source_attr) {
@@ -601,6 +602,16 @@ pub fn resolve_project(fs: &FileSet, project_dir: &str) -> ProjectScan {
                 rule4_candidates.push(format!("{pkg_rel}/{name}"));
             }
         }
+    }
+    for path in fs.hinted_scripts(project_dir) {
+        let candidate = if project_dir.is_empty() || project_dir == "." {
+            path
+        } else {
+            path.strip_prefix(&format!("{project_dir}/"))
+                .unwrap_or(&path)
+                .to_string()
+        };
+        rule4_candidates.push(candidate);
     }
 
     let mut seen = BTreeSet::new();

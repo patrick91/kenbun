@@ -1,5 +1,6 @@
+from collections.abc import Iterable, Mapping
 from os import PathLike
-from typing import Literal
+from typing import Literal, TypedDict
 
 class Span:
     start_line: int
@@ -123,11 +124,30 @@ class Workspace:
     virtual_root: bool
     members: list[str]
 
+class FileEntry:
+    path: str
+    size: int
+    blob_sha: str | None
+    def __init__(self, path: str, size: int, blob_sha: str | None = None) -> None: ...
+
+class WantFile:
+    path: str
+    reason: str
+    priority: int
+    max_bytes: int
+    blob_sha: str | None
+
+class AnalysisHints(TypedDict, total=False):
+    script_patterns: list[str]
+
 class ScanResult:
     schema_version: int
     root: str
     upload_root: str
     scan_origin: str
+    status: Literal["needs_files", "complete"]
+    completeness: Literal["complete", "partial"]
+    want_files: list[WantFile]
     workspace: Workspace | None
     applications: list[Application]
     diagnostics: list[Diagnostic]
@@ -141,4 +161,12 @@ def scan(
     max_files: int | None = None,
     follow_symlinks: bool = False,
     extra_ignore_files: list[str] | None = None,
+) -> ScanResult: ...
+
+def analyze(
+    files: Iterable[FileEntry],
+    contents: Mapping[str, bytes | None] | None = None,
+    *,
+    inventory_complete: bool = True,
+    hints: AnalysisHints | None = None,
 ) -> ScanResult: ...

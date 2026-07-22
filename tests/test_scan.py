@@ -520,7 +520,10 @@ def test_to_json_shape(tmp_path: Path) -> None:
 
     make(tmp_path, {"pyproject.toml": FASTAPI_PYPROJECT, "main.py": APP_MAIN})
     data = json.loads(kenbun.scan(tmp_path).to_json())
-    assert data["schema_version"] == 1
+    assert data["schema_version"] == 2
+    assert data["status"] == "complete"
+    assert data["completeness"] == "complete"
+    assert data["want_files"] == []
     assert data["applications"][0]["application_dir"] == "."
     assert data["applications"][0]["entrypoint"]["as_string"] == "main:app"
     assert data["applications"][0]["node"] is None

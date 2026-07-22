@@ -1,6 +1,6 @@
-# Kenbun specification (schema v1)
+# Kenbun specification (schema v2)
 
-This document defines the public schema and detection behavior for Kenbun v1.
+This document defines the public schema and detection behavior for Kenbun v2.
 Kenbun is a static repository analyzer implemented in Rust with typed Python
 bindings. It discovers applications and reports evidence; it does not make
 deployment decisions.
@@ -23,7 +23,9 @@ The words **must**, **must not**, **should**, and **may** are normative.
   that an application is supported or deployable. There is no `recommended`,
   `selected`, or generated runtime-command field.
 
-## 2. Filesystem API
+## 2. Analysis APIs
+
+### Local filesystem
 
 ```python
 def scan(
@@ -37,7 +39,8 @@ def scan(
 ) -> ScanResult: ...
 ```
 
-`root` must identify a real directory. Schema v1 has no virtual-file API.
+`root` must identify a real directory. Local scans satisfy reads immediately
+and therefore return `status="complete"` with no `want_files`.
 
 `application_dir` is an optional path relative to the caller-supplied scan root.
 Kenbun translates it into the effective workspace root, validates that it
@@ -62,6 +65,46 @@ If the supplied root is inside a recognized workspace, Kenbun may discover the
 workspace root upward. `root` remains the caller's original path;
 `upload_root` and `scan_origin` describe that path relationship.
 
+### Remote and incremental input
+
+```python
+class AnalysisHints(TypedDict, total=False):
+    script_patterns: list[str]
+
+def analyze(
+    files: Iterable[FileEntry],
+    contents: Mapping[str, bytes | None] | None = None,
+    *,
+    inventory_complete: bool = True,
+    hints: AnalysisHints | None = None,
+) -> ScanResult: ...
+```
+
+`FileEntry` contains a normalized repository-relative POSIX `path`, byte
+`size`, and optional caller-owned `blob_sha`. A path omitted from `contents`
+has not been fetched. `None` means the caller cannot provide the content and
+prevents that path from being requested again. Contents larger than 2 MiB are
+treated as unavailable.
+
+`analyze()` is pure and stateless. A caller repeats the call with accumulated
+contents until `status="complete"`. Every unresolved path is requested at
+most once per input state, and `status="needs_files"` always has a non-empty
+`want_files`. Ignore rules and manifests are requested before scripts.
+
+`inventory_complete=False` states that paths may be missing from the supplied
+inventory, for example after a truncated remote tree response. Such an input
+cannot produce a definitive negative and therefore has
+`completeness="partial"`.
+
+`hints["script_patterns"]` provides ordered positive glob hints for
+speculative source discovery. Basename patterns such as `app.py` match at any
+depth; path patterns support `*`, `?`, and `**`. Empty hints perform a
+manifest/config-only pass. On remote input, speculative Python scripts are only
+requested after a manifest declares a supported framework; an inventory with no
+Python dependency evidence therefore completes without fetching Python source.
+Scripts explicitly referenced by repository configuration remain eligible
+without a hint. Invalid or unknown hints raise `ValueError`.
+
 ## 3. Public output model
 
 All public records are frozen PyO3 classes and have corresponding type stubs.
@@ -70,10 +113,13 @@ order.
 
 ```text
 ScanResult
-├─ schema_version: int                    # exactly 1
+├─ schema_version: int                    # exactly 2
 ├─ root: str                              # path supplied to scan()
 ├─ upload_root: str                       # "." or path from root to workspace root
 ├─ scan_origin: str                       # root relative to upload root
+├─ status: "needs_files" | "complete"
+├─ completeness: "complete" | "partial"
+├─ want_files: list[WantFile]
 ├─ workspace: Workspace | None
 ├─ applications: list[Application]        # sorted by application_dir
 └─ diagnostics: list[Diagnostic]          # aggregate, deduplicated, stable order
@@ -108,7 +154,7 @@ DependencySet
 └─ resolved: list[ResolvedDep]
 
 BuildScript
-├─ name: str                              # v1 emits only "build"
+├─ name: str                              # v2 emits only "build"
 ├─ command: str                           # exact package.json script value
 ├─ package_manager: str | None
 ├─ argv: list[str] | None                 # only when safely representable
@@ -119,6 +165,13 @@ Workspace
 ├─ path: str
 ├─ virtual_root: bool
 └─ members: list[str]
+
+WantFile
+├─ path: str
+├─ reason: str
+├─ priority: int
+├─ max_bytes: int
+└─ blob_sha: str | None
 ```
 
 An `Application` may have both Python and Node dependency sets. `python` and
@@ -332,10 +385,9 @@ or executing fixture code. It must never follow a mutable default branch.
 
 ## 11. Deferred capabilities
 
-The following are intentionally outside schema v1:
+The following are intentionally outside schema v2:
 
 - PHP and Laravel application detection.
-- A virtual `analyze()` API or incremental `want_files` protocol.
 - Runtime/build command selection, application recommendation, deployability,
   or platform support policy.
 - Generic Inertia detection for stacks other than the same-root Cross Inertia

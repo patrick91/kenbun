@@ -3,7 +3,7 @@
 use pyo3::prelude::*;
 use serde::Serialize;
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
 #[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
@@ -206,11 +206,49 @@ pub struct Workspace {
 
 #[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
+pub struct FileEntry {
+    pub path: String,
+    pub size: u64,
+    pub blob_sha: Option<String>,
+}
+
+#[pymethods]
+impl FileEntry {
+    #[new]
+    #[pyo3(signature = (path, size, blob_sha=None))]
+    fn new(path: String, size: u64, blob_sha: Option<String>) -> Self {
+        Self {
+            path,
+            size,
+            blob_sha,
+        }
+    }
+
+    fn __repr__(&self) -> String {
+        format!("FileEntry(path={:?}, size={})", self.path, self.size)
+    }
+}
+
+#[pyclass(get_all, frozen, skip_from_py_object)]
+#[derive(Clone, Debug, Serialize)]
+pub struct WantFile {
+    pub path: String,
+    pub reason: String,
+    pub priority: u32,
+    pub max_bytes: u64,
+    pub blob_sha: Option<String>,
+}
+
+#[pyclass(get_all, frozen, skip_from_py_object)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ScanResult {
     pub schema_version: u32,
     pub root: String,
     pub upload_root: String,
     pub scan_origin: String,
+    pub status: String,
+    pub completeness: String,
+    pub want_files: Vec<WantFile>,
     pub workspace: Option<Workspace>,
     pub applications: Vec<Application>,
     pub diagnostics: Vec<Diagnostic>,

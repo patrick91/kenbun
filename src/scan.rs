@@ -28,6 +28,81 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
         opts.follow_symlinks,
         &opts.extra_ignore_files,
     );
+    let mut result = scan_fileset(
+        &fs,
+        opts,
+        root.to_string_lossy().to_string(),
+        effective.upload_root,
+        effective.scan_origin,
+    );
+    if fs.truncated || fs.unavailable_seen() {
+        result.completeness = "partial".to_string();
+    }
+    result
+}
+
+pub fn analyze(fs: &FileSet, inventory_complete: bool) -> ScanResult {
+    let opts = ScanOptions {
+        application_dir: None,
+        entrypoint: None,
+        max_files: None,
+        follow_symlinks: false,
+        extra_ignore_files: Vec::new(),
+    };
+    if fs.has_ignore_wants() {
+        return finish_virtual_result(
+            ScanResult {
+                schema_version: SCHEMA_VERSION,
+                root: ".".to_string(),
+                upload_root: ".".to_string(),
+                scan_origin: ".".to_string(),
+                status: "complete".to_string(),
+                completeness: "complete".to_string(),
+                want_files: Vec::new(),
+                workspace: None,
+                applications: Vec::new(),
+                diagnostics: Vec::new(),
+            },
+            fs,
+            inventory_complete,
+        );
+    }
+    let result = scan_fileset(fs, &opts, ".".to_string(), ".".to_string(), ".".to_string());
+    finish_virtual_result(result, fs, inventory_complete)
+}
+
+fn finish_virtual_result(
+    mut result: ScanResult,
+    fs: &FileSet,
+    inventory_complete: bool,
+) -> ScanResult {
+    result.want_files = fs.wants();
+    result.status = if result.want_files.is_empty() {
+        "complete".to_string()
+    } else {
+        "needs_files".to_string()
+    };
+    let identity_parse_failed = result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| matches!(diagnostic.code.as_str(), "KB201" | "KB203"));
+    if !inventory_complete
+        || fs.unavailable_seen()
+        || identity_parse_failed
+        || !result.want_files.is_empty()
+    {
+        result.completeness = "partial".to_string();
+    }
+    result
+}
+
+fn scan_fileset(
+    fs: &FileSet,
+    opts: &ScanOptions,
+    root: String,
+    upload_root: String,
+    scan_origin: String,
+) -> ScanResult {
     let mut scan_diags: Vec<Diagnostic> = Vec::new();
     for issue in &fs.issues {
         let diagnostic = if issue.message.contains("scan root") {
@@ -40,7 +115,7 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
     if fs.truncated {
         scan_diags.push(diag::kb802(opts.max_files.unwrap_or(0)));
     }
-    let node_discovery = node::discover(&fs);
+    let node_discovery = node::discover(fs);
     scan_diags.extend(
         node_discovery
             .parse_errors
@@ -68,7 +143,7 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
     let mut ws_info = None;
     if let Some(ws) = &ws_table {
         let has_project = root_parsed.as_ref().is_some_and(|pp| pp.project.is_some());
-        let info = workspace::expand_workspace(&fs, ws, has_project);
+        let info = workspace::expand_workspace(fs, ws, has_project);
         scan_diags.extend(info.diagnostics.clone());
         ws_info = Some(info.workspace);
     }
@@ -135,10 +210,10 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
         if is_absolute_like(raw) || normalized.starts_with("..") {
             scan_diags.push(diag::kb501(raw));
         } else {
-            let scan_origin = if effective.scan_origin == "." {
+            let scan_origin = if scan_origin == "." {
                 String::new()
             } else {
-                effective.scan_origin.clone()
+                scan_origin.clone()
             };
             let as_project = if normalized == "." {
                 scan_origin
@@ -164,13 +239,13 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
     let mut projects: Vec<Project> = Vec::new();
     for dir in &project_dirs {
         let hint_entry = if hint_dir.as_deref() == Some(dir.as_str())
-            || (hint_dir.is_none() && origin_matches(&effective.scan_origin, dir))
+            || (hint_dir.is_none() && origin_matches(&scan_origin, dir))
         {
             opts.entrypoint.as_deref()
         } else {
             None
         };
-        projects.push(analyze_project(&fs, dir, workspace_lock, hint_entry));
+        projects.push(analyze_project(fs, dir, workspace_lock, hint_entry));
     }
 
     let mut applications = python_applications(&projects);
@@ -226,9 +301,12 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
 
     ScanResult {
         schema_version: SCHEMA_VERSION,
-        root: root.to_string_lossy().to_string(),
-        upload_root: effective.upload_root,
-        scan_origin: effective.scan_origin,
+        root,
+        upload_root,
+        scan_origin,
+        status: "complete".to_string(),
+        completeness: "complete".to_string(),
+        want_files: Vec::new(),
         workspace: ws_info,
         applications,
         diagnostics: all_diags,
@@ -640,10 +718,11 @@ fn analyze_project(
         match fs.read_str(pp_path).map(|s| manifest::parse_pyproject(&s)) {
             Some(Ok(pp)) => parsed = Some(pp),
             Some(Err(err)) => diagnostics.push(diag::kb201(pp_path, &err)),
-            None => diagnostics.push(diag::kb801(
+            None if !fs.is_pending(pp_path) => diagnostics.push(diag::kb801(
                 pp_path,
                 "pyproject.toml is unreadable, non-UTF-8, or exceeds the 2 MiB parse cap",
             )),
+            None => {}
         }
     }
     let is_ws_root = parsed
@@ -861,16 +940,27 @@ fn analyze_project(
         .and_then(|pp| pp.tool.as_ref())
         .and_then(|t| t.fastapi.as_ref())
         .and_then(|f| f.entrypoint.clone());
+    let should_resolve_entrypoint = !fs.is_virtual()
+        || fastapi_declared
+        || entrypoint_hint.is_some()
+        || tool_entrypoint.is_some();
+    if fastapi_declared {
+        fs.enable_script_hints();
+    }
 
     let mut resolution: Option<Resolution> = None;
-    if let Some(hint) = entrypoint_hint {
-        match entrypoint::validate_entrypoint(fs, dir, hint, "hint") {
-            Ok(res) => resolution = Some(res),
-            Err(diags) => diagnostics.extend(diags),
+    if should_resolve_entrypoint {
+        if let Some(hint) = entrypoint_hint {
+            allow_entrypoint_scripts(fs, dir, hint);
+            match entrypoint::validate_entrypoint(fs, dir, hint, "hint") {
+                Ok(res) => resolution = Some(res),
+                Err(diags) => diagnostics.extend(diags),
+            }
         }
     }
-    if resolution.is_none() {
+    if should_resolve_entrypoint && resolution.is_none() {
         if let Some(spec) = &tool_entrypoint {
+            allow_entrypoint_scripts(fs, dir, spec);
             match entrypoint::validate_entrypoint(fs, dir, spec, "tool-fastapi") {
                 Ok(res) => resolution = Some(res),
                 Err(diags) => diagnostics.extend(diags),
@@ -879,7 +969,7 @@ fn analyze_project(
     }
     let mut router_only = false;
     let mut import_seen = false;
-    if resolution.is_none() {
+    if should_resolve_entrypoint && resolution.is_none() {
         let scan = entrypoint::resolve_project(fs, dir);
         diagnostics.extend(scan.diagnostics);
         evidence.extend(scan.evidence);
@@ -989,6 +1079,31 @@ fn analyze_project(
         },
         evidence,
         diagnostics,
+    }
+}
+
+fn allow_entrypoint_scripts(fs: &FileSet, project_dir: &str, spec: &str) {
+    let Some((module, _)) = spec.split_once(':') else {
+        return;
+    };
+    let module_path = module.replace('.', "/");
+    for root in ["", "src"] {
+        let base = match (
+            project_dir.is_empty() || project_dir == ".",
+            root.is_empty(),
+        ) {
+            (true, true) => String::new(),
+            (true, false) => root.to_string(),
+            (false, true) => project_dir.to_string(),
+            (false, false) => format!("{project_dir}/{root}"),
+        };
+        let prefix = if base.is_empty() {
+            String::new()
+        } else {
+            format!("{base}/")
+        };
+        fs.allow_script(format!("{prefix}{module_path}.py"));
+        fs.allow_script(format!("{prefix}{module_path}/__init__.py"));
     }
 }
 

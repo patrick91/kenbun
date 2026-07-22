@@ -9,11 +9,13 @@ mod runtime;
 mod scan;
 mod workspace;
 
+use std::collections::BTreeMap;
 use std::path::PathBuf;
 
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
-use crate::model::ScanResult;
+use crate::model::{FileEntry, ScanResult};
 
 /// Statically analyze a directory: find applications, technologies,
 /// entrypoints, build facts, and problems without executing user code.
@@ -39,9 +41,49 @@ fn scan_py(
     Ok(py.detach(|| scan::scan(&root, &opts)))
 }
 
+/// Analyze a caller-provided repository inventory without filesystem or
+/// network access. Missing contents are returned as ordered file requests.
+#[pyfunction]
+#[pyo3(signature = (files, contents=None, *, inventory_complete=true, hints=None))]
+fn analyze(
+    py: Python<'_>,
+    files: &Bound<'_, PyAny>,
+    contents: Option<&Bound<'_, PyAny>>,
+    inventory_complete: bool,
+    hints: Option<BTreeMap<String, Vec<String>>>,
+) -> PyResult<ScanResult> {
+    let entries = files
+        .try_iter()?
+        .map(|entry| {
+            let entry = entry?;
+            Ok(entry.extract::<PyRef<'_, FileEntry>>()?.clone())
+        })
+        .collect::<PyResult<Vec<_>>>()?;
+    let mut extracted_contents = BTreeMap::new();
+    if let Some(contents) = contents {
+        for item in contents.call_method0("items")?.try_iter()? {
+            let (path, content) = item?.extract::<(String, Option<Vec<u8>>)>()?;
+            extracted_contents.insert(path, content);
+        }
+    }
+    let mut hints = hints.unwrap_or_default();
+    let script_patterns = hints.remove("script_patterns").unwrap_or_default();
+    if let Some(key) = hints.keys().next() {
+        return Err(PyValueError::new_err(format!(
+            "unknown analysis hint: {key}"
+        )));
+    }
+    let fs = fileset::virtual_files(entries, extracted_contents, script_patterns)
+        .map_err(PyValueError::new_err)?;
+    Ok(py.detach(|| scan::analyze(&fs, inventory_complete)))
+}
+
 #[pymodule(gil_used = false, name = "_kenbun")]
 fn kenbun(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(scan_py, m)?)?;
+    m.add_function(wrap_pyfunction!(analyze, m)?)?;
+    m.add_class::<model::FileEntry>()?;
+    m.add_class::<model::WantFile>()?;
     m.add_class::<model::ScanResult>()?;
     m.add_class::<model::Workspace>()?;
     m.add_class::<model::Application>()?;

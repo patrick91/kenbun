@@ -36,11 +36,32 @@ for application in result.applications:
 print(result.to_json())
 ```
 
-`scan()` currently accepts a real directory only. It walks the repository,
-honors built-in and caller-provided ignore rules, discovers supported
-workspaces, and returns `ScanResult` with `schema_version == 1`. Results are
-deterministically ordered and available as typed PyO3 objects or canonical
-JSON.
+For remote repositories, pass an inventory first and feed requested contents
+back into the stateless analyzer:
+
+```python
+files = [
+    kenbun.FileEntry("pyproject.toml", 128, "git-blob-sha"),
+    kenbun.FileEntry("app.py", 512, "another-blob-sha"),
+]
+contents: dict[str, bytes | None] = {}
+
+while True:
+    result = kenbun.analyze(
+        files,
+        contents,
+        inventory_complete=True,
+        hints={"script_patterns": ["main.py", "app.py", "api.py"]},
+    )
+    if result.status == "complete":
+        break
+    for wanted in result.want_files:
+        contents[wanted.path] = fetch_blob(wanted.blob_sha)  # or None
+```
+
+`scan()` walks a real directory. `analyze()` is sans-I/O and incrementally
+requests only the contents it needs. Both return schema v2 `ScanResult`
+objects with deterministic ordering and canonical JSON.
 
 ## Supported detection
 
@@ -74,8 +95,8 @@ kept separate and must independently qualify as an application.
 
 ## Output model
 
-- `ScanResult` contains the scan paths, optional `Workspace`, ordered
-  `applications`, and aggregate diagnostics.
+- `ScanResult` contains protocol status/completeness, ordered `want_files`,
+  scan paths, optional `Workspace`, ordered `applications`, and diagnostics.
 - `Application` contains `technologies`, optional entrypoint, one or more
   ecosystem-specific `DependencySet` values, explicit `build_scripts`, Python
   and Node runtime metadata, evidence, and local diagnostics.
@@ -85,7 +106,7 @@ kept separate and must independently qualify as an application.
 - `BuildScript` records the explicit `build` script as data: the raw command,
   optional safely parsed argv, optional inferred package manager, and source.
 
-See the [v1 specification](docs/spec.md) for the normative model and detection
+See the [v2 specification](docs/spec.md) for the normative model and detection
 rules.
 
 ## External fixture corpus
