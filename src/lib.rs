@@ -17,6 +17,11 @@ use pyo3::prelude::*;
 
 use crate::model::ScanResult;
 
+#[cfg(target_os = "macos")]
+unsafe extern "C" {
+    fn getpid() -> i32;
+}
+
 /// Statically analyze a directory: find applications, technologies,
 /// entrypoints, build facts, and problems without executing user code.
 #[pyfunction]
@@ -82,6 +87,12 @@ fn analyze(
 
 #[pymodule(gil_used = false, name = "_kenbun")]
 fn kenbun(m: &Bound<'_, PyModule>) -> PyResult<()> {
+    // macOS 27 requires the Mach-O string table to be 8-byte aligned, while
+    // Apple's linker omits padding after an odd-length indirect symbol table.
+    // Materializing one non-lazy system symbol keeps the table aligned.
+    #[cfg(target_os = "macos")]
+    std::hint::black_box(getpid as unsafe extern "C" fn() -> i32);
+
     m.add_function(wrap_pyfunction!(scan_py, m)?)?;
     m.add_function(wrap_pyfunction!(analyze, m)?)?;
     m.add_class::<model::FileRequest>()?;
