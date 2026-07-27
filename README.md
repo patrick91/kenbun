@@ -44,6 +44,7 @@ analysis = kenbun.remote_analysis(
     ["pyproject.toml", "app.py"],
     inventory_complete=True,
     hints={"script_patterns": ["main.py", "app.py", "api.py"]},
+    max_file_bytes=256 * 1024,
 )
 
 while file_requests := analysis.file_requests:

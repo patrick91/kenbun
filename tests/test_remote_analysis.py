@@ -64,6 +64,14 @@ def test_remote_analysis_validates_updates() -> None:
         analysis.update({})
 
 
+def test_remote_analysis_applies_custom_file_limit() -> None:
+    analysis = kenbun.remote_analysis(["pyproject.toml"], max_file_bytes=4)
+
+    assert analysis.file_requests[0].max_bytes == 4
+    with pytest.raises(ValueError, match="4-byte limit"):
+        analysis.update({"pyproject.toml": b"12345"})
+
+
 def test_remote_analysis_enforces_round_limit() -> None:
     files = [f"packages/{index:02}/pyproject.toml" for index in range(65)]
     analysis = kenbun.remote_analysis(files, max_rounds=1)
@@ -81,3 +89,9 @@ def test_remote_analysis_enforces_round_limit() -> None:
 def test_remote_analysis_requires_positive_round_limit(max_rounds: int) -> None:
     with pytest.raises(ValueError, match="positive integer"):
         kenbun.remote_analysis([], max_rounds=max_rounds)
+
+
+@pytest.mark.parametrize("max_file_bytes", [0, -1, True, 1.5])
+def test_remote_analysis_requires_positive_file_limit(max_file_bytes: int) -> None:
+    with pytest.raises(ValueError, match="positive integer"):
+        kenbun.remote_analysis([], max_file_bytes=max_file_bytes)

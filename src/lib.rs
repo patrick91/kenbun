@@ -49,14 +49,20 @@ fn scan_py(
 /// Analyze a caller-provided repository inventory without filesystem or
 /// network access. Missing contents are returned as ordered file requests.
 #[pyfunction]
-#[pyo3(signature = (files, contents=None, *, inventory_complete=true, hints=None))]
+#[pyo3(signature = (files, contents=None, *, inventory_complete=true, hints=None, max_file_bytes=2_097_152))]
 fn analyze(
     py: Python<'_>,
     files: &Bound<'_, PyAny>,
     contents: Option<&Bound<'_, PyAny>>,
     inventory_complete: bool,
     hints: Option<BTreeMap<String, Vec<String>>>,
+    max_file_bytes: u64,
 ) -> PyResult<ScanResult> {
+    if max_file_bytes == 0 {
+        return Err(PyValueError::new_err(
+            "max_file_bytes must be a positive integer",
+        ));
+    }
     let paths = files
         .try_iter()?
         .enumerate()
@@ -80,7 +86,7 @@ fn analyze(
             "unknown analysis hint: {key}"
         )));
     }
-    let fs = fileset::virtual_files(paths, extracted_contents, script_patterns)
+    let fs = fileset::virtual_files(paths, extracted_contents, script_patterns, max_file_bytes)
         .map_err(PyValueError::new_err)?;
     Ok(py.detach(|| scan::analyze(&fs, inventory_complete)))
 }

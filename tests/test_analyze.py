@@ -46,6 +46,21 @@ def test_analyze_accepts_generic_iterables_and_mappings() -> None:
     assert result.applications[0].name == "demo"
 
 
+def test_analyze_applies_custom_file_limit() -> None:
+    requested = kenbun.analyze(["pyproject.toml"], max_file_bytes=4)
+
+    assert requested.file_requests[0].max_bytes == 4
+
+    result = kenbun.analyze(
+        ["pyproject.toml"],
+        {"pyproject.toml": b"12345"},
+        max_file_bytes=4,
+    )
+
+    assert result.status == "complete"
+    assert result.completeness == "partial"
+
+
 def test_script_hints_drive_incremental_entrypoint_resolution() -> None:
     files = [entry("pyproject.toml"), entry("services/api/app.py")]
     contents = {"pyproject.toml": FASTAPI_MANIFEST}
@@ -233,3 +248,5 @@ def test_invalid_inputs_fail_loudly() -> None:
         kenbun.analyze([], hints={"scripts_patterns": ["app.py"]})
     with pytest.raises(ValueError, match="invalid script pattern"):
         kenbun.analyze([], hints={"script_patterns": ["../*.py"]})
+    with pytest.raises(ValueError, match="positive integer"):
+        kenbun.analyze([], max_file_bytes=0)

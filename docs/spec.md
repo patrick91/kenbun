@@ -77,6 +77,7 @@ def remote_analysis(
     inventory_complete: bool = True,
     hints: AnalysisHints | None = None,
     max_rounds: int = 20,
+    max_file_bytes: int = 2 * 1024 * 1024,
 ) -> RemoteAnalysis: ...
 
 def analyze(
@@ -85,6 +86,7 @@ def analyze(
     *,
     inventory_complete: bool = True,
     hints: AnalysisHints | None = None,
+    max_file_bytes: int = 2 * 1024 * 1024,
 ) -> ScanResult: ...
 ```
 
@@ -92,7 +94,8 @@ def analyze(
 metadata such as blob identifiers and repository-reported sizes belongs to the
 caller. A path omitted from `contents` has not been fetched. `None` means the
 caller cannot provide the content and prevents that path from being requested
-again. The stateless primitive treats oversized contents as unavailable.
+again. `max_file_bytes` configures the per-file parse cap advertised on every
+request. The stateless primitive treats oversized contents as unavailable.
 
 `remote_analysis()` creates a stateful analysis over that inventory. Its
 `file_requests` property contains the current ordered `list[FileRequest]`.

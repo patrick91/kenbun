@@ -6,6 +6,7 @@ from kenbun._kenbun import FileRequest, ScanResult, analyze
 from kenbun._types import AnalysisHints
 
 DEFAULT_MAX_ROUNDS = 20
+DEFAULT_MAX_FILE_BYTES = 2 * 1024 * 1024
 
 
 class RemoteAnalysis:
@@ -18,6 +19,7 @@ class RemoteAnalysis:
         inventory_complete: bool = True,
         hints: AnalysisHints | None = None,
         max_rounds: int = DEFAULT_MAX_ROUNDS,
+        max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
     ) -> None:
         if (
             not isinstance(max_rounds, int)
@@ -25,12 +27,19 @@ class RemoteAnalysis:
             or max_rounds < 1
         ):
             raise ValueError("max_rounds must be a positive integer")
+        if (
+            not isinstance(max_file_bytes, int)
+            or isinstance(max_file_bytes, bool)
+            or max_file_bytes < 1
+        ):
+            raise ValueError("max_file_bytes must be a positive integer")
 
         self._files = tuple(files)
         self._contents: dict[str, bytes | None] = {}
         self._inventory_complete = inventory_complete
         self._hints = hints
         self._max_rounds = max_rounds
+        self._max_file_bytes = max_file_bytes
         self._current = self._analyze()
         self._validate_current()
         self._round_number = 1 if self.file_requests else 0
@@ -100,6 +109,7 @@ class RemoteAnalysis:
             self._contents,
             inventory_complete=self._inventory_complete,
             hints=self._hints,
+            max_file_bytes=self._max_file_bytes,
         )
 
     def _validate_current(self) -> None:
@@ -117,12 +127,14 @@ def remote_analysis(
     inventory_complete: bool = True,
     hints: AnalysisHints | None = None,
     max_rounds: int = DEFAULT_MAX_ROUNDS,
+    max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
 ) -> RemoteAnalysis:
     return RemoteAnalysis(
         files,
         inventory_complete=inventory_complete,
         hints=hints,
         max_rounds=max_rounds,
+        max_file_bytes=max_file_bytes,
     )
 
 

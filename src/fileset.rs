@@ -71,6 +71,7 @@ enum FileSource {
 
 struct VirtualSource {
     contents: BTreeMap<String, Option<Vec<u8>>>,
+    max_file_bytes: u64,
     script_patterns: Vec<ScriptPattern>,
     script_hints_enabled: AtomicBool,
     allowed_scripts: Mutex<BTreeSet<String>>,
@@ -141,7 +142,11 @@ impl FileSet {
 
     pub fn read(&self, rel: &str) -> Option<Vec<u8>> {
         let size = *self.files.get(rel)?;
-        if size > MAX_FILE_BYTES {
+        let max_file_bytes = match &self.source {
+            FileSource::Local => MAX_FILE_BYTES,
+            FileSource::Virtual(source) => source.max_file_bytes,
+        };
+        if size > max_file_bytes {
             self.mark_unavailable();
             return None;
         }
@@ -154,7 +159,9 @@ impl FileSet {
                 bytes
             }
             FileSource::Virtual(source) => match source.contents.get(rel) {
-                Some(Some(bytes)) if bytes.len() as u64 <= MAX_FILE_BYTES => Some(bytes.clone()),
+                Some(Some(bytes)) if bytes.len() as u64 <= source.max_file_bytes => {
+                    Some(bytes.clone())
+                }
                 Some(_) => {
                     source.unavailable_seen.store(true, Ordering::Relaxed);
                     None
@@ -188,7 +195,7 @@ impl FileSet {
                                 path: rel.to_string(),
                                 reason: reason.to_string(),
                                 priority,
-                                max_bytes: MAX_FILE_BYTES,
+                                max_bytes: source.max_file_bytes,
                             }
                         });
                     None
@@ -365,6 +372,7 @@ pub fn virtual_files(
     paths: Vec<String>,
     contents: BTreeMap<String, Option<Vec<u8>>>,
     script_patterns: Vec<String>,
+    max_file_bytes: u64,
 ) -> Result<FileSet, String> {
     let mut all_entries = BTreeMap::new();
     for path in paths {
@@ -419,11 +427,14 @@ pub fn virtual_files(
                         path: path.clone(),
                         reason: "ignore rules".to_string(),
                         priority: 0,
-                        max_bytes: MAX_FILE_BYTES,
+                        max_bytes: max_file_bytes,
                     },
                 );
             }
             Some(None) => unavailable_seen = true,
+            Some(Some(bytes)) if bytes.len() as u64 > max_file_bytes => {
+                unavailable_seen = true;
+            }
             Some(Some(bytes)) => match std::str::from_utf8(bytes) {
                 Ok(source) => {
                     let dir = path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
@@ -486,6 +497,7 @@ pub fn virtual_files(
         issues,
         source: FileSource::Virtual(VirtualSource {
             contents,
+            max_file_bytes,
             script_patterns: compiled_patterns,
             script_hints_enabled: AtomicBool::new(false),
             allowed_scripts: Mutex::new(BTreeSet::new()),

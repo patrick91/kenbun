@@ -147,4 +147,5 @@ def analyze(
     *,
     inventory_complete: bool = True,
     hints: AnalysisHints | None = None,
+    max_file_bytes: int = 2 * 1024 * 1024,
 ) -> ScanResult: ...
