@@ -36,32 +36,29 @@ for application in result.applications:
 print(result.to_json())
 ```
 
-For remote repositories, pass an inventory first and feed requested contents
-back into the stateless analyzer:
+For remote repositories, pass the repository-relative paths and feed requested
+contents into a stateful analysis:
 
 ```python
-files: list[kenbun.FileEntry] = [
-    kenbun.FileEntry(path="pyproject.toml", size=128, blob_sha="git-blob-sha"),
-    kenbun.FileEntry(path="app.py", size=512, blob_sha="another-blob-sha"),
-]
-contents: dict[str, bytes | None] = {}
+analysis = kenbun.remote_analysis(
+    ["pyproject.toml", "app.py"],
+    inventory_complete=True,
+    hints={"script_patterns": ["main.py", "app.py", "api.py"]},
+)
 
-while True:
-    result = kenbun.analyze(
-        files,
-        contents,
-        inventory_complete=True,
-        hints={"script_patterns": ["main.py", "app.py", "api.py"]},
-    )
-    if result.status == "complete":
-        break
-    for wanted in result.want_files:
-        contents[wanted.path] = fetch_blob(wanted.blob_sha)  # or None
+while analysis.needs_more:
+    contents = fetch_files(analysis.requests)
+    analysis.update(contents)
+
+result = analysis.result
 ```
 
-`scan()` walks a real directory. `analyze()` is sans-I/O and incrementally
-requests only the contents it needs. Both return schema v3 `ScanResult`
-objects with deterministic ordering and canonical JSON.
+Each `FileRequest` contains a path, reason, priority, and per-file byte limit.
+The caller owns transport-specific metadata and returns `bytes` or `None` for
+every requested path. `scan()` walks a real directory; `analyze()` remains the
+pure, stateless primitive beneath `remote_analysis()`. Both analysis modes
+produce schema v3 `ScanResult` objects with deterministic ordering and
+canonical JSON.
 
 ## Supported detection
 
@@ -95,7 +92,7 @@ kept separate and must independently qualify as an application.
 
 ## Output model
 
-- `ScanResult` contains protocol status/completeness, ordered `want_files`,
+- `ScanResult` contains protocol status/completeness, ordered `requests`,
   scan paths, optional `Workspace`, ordered `applications`, and diagnostics.
 - `Application` contains `technologies`, optional entrypoint, one or more
   ecosystem-specific `DependencySet` values, explicit `build_scripts`, Python

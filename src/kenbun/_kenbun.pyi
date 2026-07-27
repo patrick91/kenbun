@@ -2,7 +2,7 @@ from collections.abc import Iterable, Mapping
 from os import PathLike
 from typing import Literal
 
-from kenbun._types import AnalysisHints, FileEntry
+from kenbun._types import AnalysisHints
 
 class Span:
     start_line: int
@@ -113,12 +113,11 @@ class Workspace:
     virtual_root: bool
     members: list[str]
 
-class WantFile:
+class FileRequest:
     path: str
     reason: str
     priority: int
     max_bytes: int
-    blob_sha: str | None
 
 class ScanResult:
     schema_version: int
@@ -127,7 +126,7 @@ class ScanResult:
     scan_origin: str
     status: Literal["needs_files", "complete"]
     completeness: Literal["complete", "partial"]
-    want_files: list[WantFile]
+    requests: list[FileRequest]
     workspace: Workspace | None
     applications: list[Application]
     diagnostics: list[Diagnostic]
@@ -143,7 +142,7 @@ def scan(
     extra_ignore_files: list[str] | None = None,
 ) -> ScanResult: ...
 def analyze(
-    files: Iterable[FileEntry],
+    files: Iterable[str],
     contents: Mapping[str, bytes | None] | None = None,
     *,
     inventory_complete: bool = True,

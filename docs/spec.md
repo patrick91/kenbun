@@ -40,7 +40,7 @@ def scan(
 ```
 
 `root` must identify a real directory. Local scans satisfy reads immediately
-and therefore return `status="complete"` with no `want_files`.
+and therefore return `status="complete"` with no `requests`.
 
 `application_dir` is an optional path relative to the caller-supplied scan root.
 Kenbun translates it into the effective workspace root, validates that it
@@ -68,18 +68,19 @@ workspace root upward. `root` remains the caller's original path;
 ### Remote and incremental input
 
 ```python
-class _RequiredFileEntry(TypedDict):
-    path: str
-    size: int
-
-class FileEntry(_RequiredFileEntry, total=False):
-    blob_sha: str | None
-
 class AnalysisHints(TypedDict, total=False):
     script_patterns: list[str]
 
+def remote_analysis(
+    files: Iterable[str],
+    *,
+    inventory_complete: bool = True,
+    hints: AnalysisHints | None = None,
+    max_rounds: int = 20,
+) -> RemoteAnalysis: ...
+
 def analyze(
-    files: Iterable[FileEntry],
+    files: Iterable[str],
     contents: Mapping[str, bytes | None] | None = None,
     *,
     inventory_complete: bool = True,
@@ -87,16 +88,24 @@ def analyze(
 ) -> ScanResult: ...
 ```
 
-`FileEntry` is a typed mapping containing a normalized repository-relative
-POSIX `path`, byte `size`, and optional caller-owned `blob_sha`. A path omitted
-from `contents` has not been fetched. `None` means the caller cannot provide
-the content and prevents that path from being requested again. Contents larger
-than 2 MiB are treated as unavailable.
+`files` contains normalized repository-relative POSIX paths. Transport
+metadata such as blob identifiers and repository-reported sizes belongs to the
+caller. A path omitted from `contents` has not been fetched. `None` means the
+caller cannot provide the content and prevents that path from being requested
+again. The stateless primitive treats oversized contents as unavailable.
+
+`remote_analysis()` creates a stateful analysis over that inventory. While
+`needs_more` is true, `requests` contains the current ordered
+`list[FileRequest]`. `update()` requires one `bytes | None` response for every
+request, rejects contents larger than that request's `max_bytes`, accumulates
+the response, and advances the analysis. `result` is available only after
+completion. The session owns round limits, progress validation, and the
+accumulated contents.
 
 `analyze()` is pure and stateless. A caller repeats the call with accumulated
 contents until `status="complete"`. Every unresolved path is requested at
 most once per input state, and `status="needs_files"` always has a non-empty
-`want_files`. Ignore rules and manifests are requested before scripts.
+`requests`. Ignore rules and manifests are requested before scripts.
 
 `inventory_complete=False` states that paths may be missing from the supplied
 inventory, for example after a truncated remote tree response. Such an input
@@ -127,7 +136,7 @@ ScanResult
 ├─ scan_origin: str                       # root relative to upload root
 ├─ status: "needs_files" | "complete"
 ├─ completeness: "complete" | "partial"
-├─ want_files: list[WantFile]
+├─ requests: list[FileRequest]
 ├─ workspace: Workspace | None
 ├─ applications: list[Application]        # sorted by application_dir
 └─ diagnostics: list[Diagnostic]          # aggregate, deduplicated, stable order
@@ -172,12 +181,11 @@ Workspace
 ├─ virtual_root: bool
 └─ members: list[str]
 
-WantFile
+FileRequest
 ├─ path: str
 ├─ reason: str
 ├─ priority: int
-├─ max_bytes: int
-└─ blob_sha: str | None
+└─ max_bytes: int
 ```
 
 An `Application` may have both Python and Node dependency sets. `python` and

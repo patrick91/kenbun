@@ -7,6 +7,7 @@ from kenbun._kenbun import (
     Entrypoint,
     EnvVar,
     Evidence,
+    FileRequest,
     ManifestRef,
     NodeInfo,
     PythonInfo,
@@ -15,12 +16,12 @@ from kenbun._kenbun import (
     Span,
     Technology,
     VersionPin,
-    WantFile,
     Workspace,
     analyze,
     scan,
 )
-from kenbun._types import AnalysisHints, FileEntry
+from kenbun._remote import RemoteAnalysis, remote_analysis
+from kenbun._types import AnalysisHints
 
 __all__ = [
     "AnalysisHints",
@@ -32,17 +33,18 @@ __all__ = [
     "Entrypoint",
     "EnvVar",
     "Evidence",
-    "FileEntry",
+    "FileRequest",
     "ManifestRef",
     "NodeInfo",
     "PythonInfo",
+    "RemoteAnalysis",
     "ScanResult",
     "SourceRef",
     "Span",
     "Technology",
     "VersionPin",
-    "WantFile",
     "Workspace",
     "analyze",
+    "remote_analysis",
     "scan",
 ]

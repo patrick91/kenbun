@@ -52,11 +52,12 @@ directory hint from `target_dir` to `application_dir`.
 
 ## Unreleased
 
-- Add the stateless `analyze()` API for remote inventories, incremental
-  `want_files`, explicit completeness, unavailable contents, and ordered script
-  pattern hints. Remote script probing is manifest-first, so repositories
-  without supported dependency evidence avoid speculative source reads. Its
-  inventory uses typed mappings with strict runtime validation.
+- Add `remote_analysis()` for stateful incremental repository analysis, backed
+  by the pure `analyze()` primitive. Remote inventories contain only paths;
+  ordered `FileRequest` objects ask callers for contents without transport
+  metadata leaking into Kenbun. Remote script probing is manifest-first, so
+  repositories without supported dependency evidence avoid speculative source
+  reads.
 - Stop reading lockfiles and remove resolved dependency and lockfile facts.
   Schema v3 focuses dependency analysis on declarative manifests.
 - Replace the Python-project/deploy-target/classification response with the

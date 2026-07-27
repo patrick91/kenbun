@@ -12,11 +12,10 @@ mod workspace;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use pyo3::exceptions::{PyKeyError, PyTypeError, PyValueError};
+use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyDict;
 
-use crate::model::{FileEntry, ScanResult};
+use crate::model::ScanResult;
 
 /// Statically analyze a directory: find applications, technologies,
 /// entrypoints, build facts, and problems without executing user code.
@@ -53,47 +52,13 @@ fn analyze(
     inventory_complete: bool,
     hints: Option<BTreeMap<String, Vec<String>>>,
 ) -> PyResult<ScanResult> {
-    let entries = files
+    let paths = files
         .try_iter()?
         .enumerate()
         .map(|(index, entry)| {
-            let entry = entry?;
-            let entry = entry
-                .cast::<PyDict>()
-                .map_err(|_| PyTypeError::new_err(format!("files[{index}] must be a dict")))?;
-            let path = entry
-                .get_item("path")?
-                .ok_or_else(|| {
-                    PyKeyError::new_err(format!("files[{index}] is missing required key 'path'"))
-                })?
+            entry?
                 .extract::<String>()
-                .map_err(|_| {
-                    PyTypeError::new_err(format!("files[{index}]['path'] must be a string"))
-                })?;
-            let size = entry
-                .get_item("size")?
-                .ok_or_else(|| {
-                    PyKeyError::new_err(format!("files[{index}] is missing required key 'size'"))
-                })?
-                .extract::<u64>()
-                .map_err(|_| {
-                    PyTypeError::new_err(format!(
-                        "files[{index}]['size'] must be a non-negative integer"
-                    ))
-                })?;
-            let blob_sha = match entry.get_item("blob_sha")? {
-                Some(value) => value.extract::<Option<String>>().map_err(|_| {
-                    PyTypeError::new_err(format!(
-                        "files[{index}]['blob_sha'] must be a string or None"
-                    ))
-                })?,
-                None => None,
-            };
-            Ok(FileEntry {
-                path,
-                size,
-                blob_sha,
-            })
+                .map_err(|_| PyTypeError::new_err(format!("files[{index}] must be a string")))
         })
         .collect::<PyResult<Vec<_>>>()?;
     let mut extracted_contents = BTreeMap::new();
@@ -110,7 +75,7 @@ fn analyze(
             "unknown analysis hint: {key}"
         )));
     }
-    let fs = fileset::virtual_files(entries, extracted_contents, script_patterns)
+    let fs = fileset::virtual_files(paths, extracted_contents, script_patterns)
         .map_err(PyValueError::new_err)?;
     Ok(py.detach(|| scan::analyze(&fs, inventory_complete)))
 }
@@ -119,7 +84,7 @@ fn analyze(
 fn kenbun(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(scan_py, m)?)?;
     m.add_function(wrap_pyfunction!(analyze, m)?)?;
-    m.add_class::<model::WantFile>()?;
+    m.add_class::<model::FileRequest>()?;
     m.add_class::<model::ScanResult>()?;
     m.add_class::<model::Workspace>()?;
     m.add_class::<model::Application>()?;

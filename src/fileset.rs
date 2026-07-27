@@ -8,12 +8,12 @@ use std::sync::Mutex;
 
 use ignore::Match;
 
-use crate::model::{FileEntry, WantFile};
+use crate::model::FileRequest;
 
 /// Per-file parse cap: larger files are skipped as unavailable.
 pub const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
-const MAX_WANTS_PER_ROUND: usize = 64;
-const MAX_SCRIPT_WANTS_PER_ROUND: usize = 16;
+const MAX_REQUESTS_PER_ROUND: usize = 64;
+const MAX_SCRIPT_REQUESTS_PER_ROUND: usize = 16;
 
 pub fn read_bounded_path(path: &Path) -> Option<String> {
     String::from_utf8(read_bounded_bytes(path)?).ok()
@@ -71,11 +71,10 @@ enum FileSource {
 
 struct VirtualSource {
     contents: BTreeMap<String, Option<Vec<u8>>>,
-    blob_shas: BTreeMap<String, String>,
     script_patterns: Vec<ScriptPattern>,
     script_hints_enabled: AtomicBool,
     allowed_scripts: Mutex<BTreeSet<String>>,
-    wants: Mutex<BTreeMap<String, WantFile>>,
+    requests: Mutex<BTreeMap<String, FileRequest>>,
     unavailable_seen: AtomicBool,
 }
 
@@ -179,18 +178,17 @@ impl FileSet {
                         return None;
                     }
                     source
-                        .wants
+                        .requests
                         .lock()
                         .expect("lock poisoned")
                         .entry(rel.to_string())
                         .or_insert_with(|| {
                             let (reason, priority) = request_kind(rel);
-                            WantFile {
+                            FileRequest {
                                 path: rel.to_string(),
                                 reason: reason.to_string(),
                                 priority,
                                 max_bytes: MAX_FILE_BYTES,
-                                blob_sha: source.blob_shas.get(rel).cloned(),
                             }
                         });
                     None
@@ -255,7 +253,7 @@ impl FileSet {
     }
 
     pub fn is_pending(&self, rel: &str) -> bool {
-        matches!(&self.source, FileSource::Virtual(source) if source.wants.lock().expect("lock poisoned").contains_key(rel))
+        matches!(&self.source, FileSource::Virtual(source) if source.requests.lock().expect("lock poisoned").contains_key(rel))
     }
 
     pub fn unavailable_seen(&self) -> bool {
@@ -263,29 +261,29 @@ impl FileSet {
             || matches!(&self.source, FileSource::Local) && !self.issues.is_empty()
     }
 
-    pub fn wants(&self) -> Vec<WantFile> {
+    pub fn requests(&self) -> Vec<FileRequest> {
         let FileSource::Virtual(source) = &self.source else {
             return Vec::new();
         };
-        let wants = source.wants.lock().expect("lock poisoned");
-        let Some(priority) = wants.values().map(|want| want.priority).min() else {
+        let requests = source.requests.lock().expect("lock poisoned");
+        let Some(priority) = requests.values().map(|request| request.priority).min() else {
             return Vec::new();
         };
         let limit = if priority >= 40 {
-            MAX_SCRIPT_WANTS_PER_ROUND
+            MAX_SCRIPT_REQUESTS_PER_ROUND
         } else {
-            MAX_WANTS_PER_ROUND
+            MAX_REQUESTS_PER_ROUND
         };
-        wants
+        requests
             .values()
-            .filter(|want| want.priority == priority)
+            .filter(|request| request.priority == priority)
             .take(limit)
             .cloned()
             .collect()
     }
 
-    pub fn has_ignore_wants(&self) -> bool {
-        matches!(&self.source, FileSource::Virtual(source) if source.wants.lock().expect("lock poisoned").values().any(|want| want.priority == 0))
+    pub fn has_ignore_requests(&self) -> bool {
+        matches!(&self.source, FileSource::Virtual(source) if source.requests.lock().expect("lock poisoned").values().any(|request| request.priority == 0))
     }
 
     fn mark_unavailable(&self) {
@@ -364,19 +362,15 @@ fn is_excluded_dir(path: &Path) -> bool {
 }
 
 pub fn virtual_files(
-    entries: Vec<FileEntry>,
+    paths: Vec<String>,
     contents: BTreeMap<String, Option<Vec<u8>>>,
     script_patterns: Vec<String>,
 ) -> Result<FileSet, String> {
     let mut all_entries = BTreeMap::new();
-    let mut blob_shas = BTreeMap::new();
-    for entry in entries {
-        validate_relative_path(&entry.path)?;
-        if all_entries.insert(entry.path.clone(), entry.size).is_some() {
-            return Err(format!("duplicate file inventory path: {}", entry.path));
-        }
-        if let Some(blob_sha) = entry.blob_sha {
-            blob_shas.insert(entry.path, blob_sha);
+    for path in paths {
+        validate_relative_path(&path)?;
+        if all_entries.insert(path.clone(), 0).is_some() {
+            return Err(format!("duplicate file inventory path: {path}"));
         }
     }
     for path in contents.keys() {
@@ -410,7 +404,7 @@ pub fn virtual_files(
     }
 
     let mut issues = Vec::new();
-    let mut wants = BTreeMap::new();
+    let mut requests = BTreeMap::new();
     let mut ignore_matchers = Vec::new();
     let mut unavailable_seen = false;
     for path in all_entries
@@ -419,14 +413,13 @@ pub fn virtual_files(
     {
         match contents.get(path) {
             None => {
-                wants.insert(
+                requests.insert(
                     path.clone(),
-                    WantFile {
+                    FileRequest {
                         path: path.clone(),
                         reason: "ignore rules".to_string(),
                         priority: 0,
                         max_bytes: MAX_FILE_BYTES,
-                        blob_sha: blob_shas.get(path).cloned(),
                     },
                 );
             }
@@ -493,11 +486,10 @@ pub fn virtual_files(
         issues,
         source: FileSource::Virtual(VirtualSource {
             contents,
-            blob_shas,
             script_patterns: compiled_patterns,
             script_hints_enabled: AtomicBool::new(false),
             allowed_scripts: Mutex::new(BTreeSet::new()),
-            wants: Mutex::new(wants),
+            requests: Mutex::new(requests),
             unavailable_seen: AtomicBool::new(unavailable_seen),
         }),
     })

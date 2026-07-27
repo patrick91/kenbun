@@ -185,21 +185,13 @@ pub struct Workspace {
     pub members: Vec<String>,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct FileEntry {
-    pub(crate) path: String,
-    pub(crate) size: u64,
-    pub(crate) blob_sha: Option<String>,
-}
-
 #[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
-pub struct WantFile {
+pub struct FileRequest {
     pub path: String,
     pub reason: String,
     pub priority: u32,
     pub max_bytes: u64,
-    pub blob_sha: Option<String>,
 }
 
 #[pyclass(get_all, frozen, skip_from_py_object)]
@@ -211,7 +203,7 @@ pub struct ScanResult {
     pub scan_origin: String,
     pub status: String,
     pub completeness: String,
-    pub want_files: Vec<WantFile>,
+    pub requests: Vec<FileRequest>,
     pub workspace: Option<Workspace>,
     pub applications: Vec<Application>,
     pub diagnostics: Vec<Diagnostic>,

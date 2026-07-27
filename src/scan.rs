@@ -49,7 +49,7 @@ pub fn analyze(fs: &FileSet, inventory_complete: bool) -> ScanResult {
         follow_symlinks: false,
         extra_ignore_files: Vec::new(),
     };
-    if fs.has_ignore_wants() {
+    if fs.has_ignore_requests() {
         return finish_virtual_result(
             ScanResult {
                 schema_version: SCHEMA_VERSION,
@@ -58,7 +58,7 @@ pub fn analyze(fs: &FileSet, inventory_complete: bool) -> ScanResult {
                 scan_origin: ".".to_string(),
                 status: "complete".to_string(),
                 completeness: "complete".to_string(),
-                want_files: Vec::new(),
+                requests: Vec::new(),
                 workspace: None,
                 applications: Vec::new(),
                 diagnostics: Vec::new(),
@@ -76,8 +76,8 @@ fn finish_virtual_result(
     fs: &FileSet,
     inventory_complete: bool,
 ) -> ScanResult {
-    result.want_files = fs.wants();
-    result.status = if result.want_files.is_empty() {
+    result.requests = fs.requests();
+    result.status = if result.requests.is_empty() {
         "complete".to_string()
     } else {
         "needs_files".to_string()
@@ -89,7 +89,7 @@ fn finish_virtual_result(
     if !inventory_complete
         || fs.unavailable_seen()
         || identity_parse_failed
-        || !result.want_files.is_empty()
+        || !result.requests.is_empty()
     {
         result.completeness = "partial".to_string();
     }
@@ -295,7 +295,7 @@ fn scan_fileset(
         scan_origin,
         status: "complete".to_string(),
         completeness: "complete".to_string(),
-        want_files: Vec::new(),
+        requests: Vec::new(),
         workspace: ws_info,
         applications,
         diagnostics: all_diags,

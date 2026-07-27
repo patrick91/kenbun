@@ -13,8 +13,8 @@ dependencies = ["fastapi"]
 FASTAPI_APP = b"from fastapi import FastAPI\napp = FastAPI()\n"
 
 
-def entry(path: str, size: int = 64) -> kenbun.FileEntry:
-    return {"path": path, "size": size, "blob_sha": f"sha-{path}"}
+def entry(path: str) -> str:
+    return path
 
 
 def test_manifest_only_pass_does_not_request_scripts() -> None:
@@ -23,14 +23,14 @@ def test_manifest_only_pass_does_not_request_scripts() -> None:
     first = kenbun.analyze(files)
     assert first.status == "needs_files"
     assert first.completeness == "partial"
-    assert [(want.path, want.priority, want.blob_sha) for want in first.want_files] == [
-        ("pyproject.toml", 10, "sha-pyproject.toml")
+    assert [(request.path, request.priority) for request in first.requests] == [
+        ("pyproject.toml", 10)
     ]
 
     result = kenbun.analyze(files, {"pyproject.toml": FASTAPI_MANIFEST})
     assert result.status == "complete"
     assert result.completeness == "complete"
-    assert result.want_files == []
+    assert result.requests == []
     assert len(result.applications) == 1
     assert result.applications[0].name == "demo"
     assert result.applications[0].entrypoint is None
@@ -52,7 +52,7 @@ def test_script_hints_drive_incremental_entrypoint_resolution() -> None:
     hints = {"script_patterns": ["app.py"]}
 
     requested = kenbun.analyze(files, contents, hints=hints)
-    assert [(want.path, want.priority) for want in requested.want_files] == [
+    assert [(request.path, request.priority) for request in requested.requests] == [
         ("services/api/app.py", 40)
     ]
 
@@ -76,19 +76,19 @@ def test_script_hints_are_ordered_patterns_and_batched() -> None:
         hints={"script_patterns": ["**/*.py"]},
     )
     assert first.status == "needs_files"
-    assert len(first.want_files) == 16
+    assert len(first.requests) == 16
 
     contents = {
         **manifest,
-        **{want.path: b"print('ok')\n" for want in first.want_files},
+        **{request.path: b"print('ok')\n" for request in first.requests},
     }
     second = kenbun.analyze(
         files,
         contents,
         hints={"script_patterns": ["**/*.py"]},
     )
-    assert len(second.want_files) == 4
-    assert not set(contents).intersection(want.path for want in second.want_files)
+    assert len(second.requests) == 4
+    assert not set(contents).intersection(request.path for request in second.requests)
 
 
 def test_script_hints_do_not_bypass_the_manifest_quick_pass() -> None:
@@ -98,7 +98,7 @@ def test_script_hints_do_not_bypass_the_manifest_quick_pass() -> None:
 
     assert result.status == "complete"
     assert result.completeness == "complete"
-    assert result.want_files == []
+    assert result.requests == []
 
 
 def test_non_framework_manifest_does_not_request_scripts() -> None:
@@ -112,7 +112,7 @@ def test_non_framework_manifest_does_not_request_scripts() -> None:
 
     assert result.status == "complete"
     assert result.completeness == "complete"
-    assert result.want_files == []
+    assert result.requests == []
 
 
 def test_lockfiles_are_not_requested() -> None:
@@ -122,7 +122,7 @@ def test_lockfiles_are_not_requested() -> None:
 
     assert result.status == "complete"
     assert result.completeness == "complete"
-    assert result.want_files == []
+    assert result.requests == []
 
 
 def test_unavailable_content_terminates_with_partial_result() -> None:
@@ -132,7 +132,7 @@ def test_unavailable_content_terminates_with_partial_result() -> None:
 
     assert result.status == "complete"
     assert result.completeness == "partial"
-    assert result.want_files == []
+    assert result.requests == []
 
 
 def test_invalid_utf8_content_is_partial() -> None:
@@ -142,7 +142,7 @@ def test_invalid_utf8_content_is_partial() -> None:
 
     assert result.status == "complete"
     assert result.completeness == "partial"
-    assert result.want_files == []
+    assert result.requests == []
 
 
 def test_malformed_identity_manifest_is_partial() -> None:
@@ -170,11 +170,11 @@ def test_ignore_files_are_requested_before_manifests_and_filter_inventory() -> N
     ]
 
     first = kenbun.analyze(files)
-    assert [want.path for want in first.want_files] == [".gitignore"]
+    assert [request.path for request in first.requests] == [".gitignore"]
 
     result = kenbun.analyze(files, {".gitignore": b"ignored/\n"})
     assert result.status == "complete"
-    assert result.want_files == []
+    assert result.requests == []
     assert result.applications == []
 
 
@@ -201,13 +201,15 @@ def test_manifest_requests_continue_past_the_first_batch() -> None:
     files = [entry(f"packages/{index:02}/pyproject.toml") for index in range(65)]
 
     first = kenbun.analyze(files)
-    assert len(first.want_files) == 64
+    assert len(first.requests) == 64
 
     contents = {
-        want.path: b'[project]\nname = "library"\n' for want in first.want_files
+        request.path: b'[project]\nname = "library"\n' for request in first.requests
     }
     second = kenbun.analyze(files, contents)
-    assert [want.path for want in second.want_files] == ["packages/64/pyproject.toml"]
+    assert [request.path for request in second.requests] == [
+        "packages/64/pyproject.toml"
+    ]
 
     contents["packages/64/pyproject.toml"] = FASTAPI_MANIFEST
     result = kenbun.analyze(files, contents)
@@ -218,14 +220,10 @@ def test_manifest_requests_continue_past_the_first_batch() -> None:
 
 
 def test_invalid_inputs_fail_loudly() -> None:
-    with pytest.raises(TypeError, match=r"files\[0\] must be a dict"):
+    with pytest.raises(TypeError, match=r"files\[0\] must be a string"):
         kenbun.analyze([("pyproject.toml", 64)])
-    with pytest.raises(KeyError, match="missing required key 'path'"):
+    with pytest.raises(TypeError, match=r"files\[0\] must be a string"):
         kenbun.analyze([{"size": 64}])
-    with pytest.raises(TypeError, match="must be a non-negative integer"):
-        kenbun.analyze([{"path": "pyproject.toml", "size": -1}])
-    with pytest.raises(TypeError, match="must be a string or None"):
-        kenbun.analyze([{"path": "pyproject.toml", "size": 64, "blob_sha": 42}])
     with pytest.raises(ValueError, match="repository-relative"):
         kenbun.analyze([entry("../pyproject.toml")])
     with pytest.raises(ValueError, match="unknown analysis hint"):
