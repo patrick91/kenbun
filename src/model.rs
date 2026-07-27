@@ -203,7 +203,7 @@ pub struct ScanResult {
     pub scan_origin: String,
     pub status: String,
     pub completeness: String,
-    pub requests: Vec<FileRequest>,
+    pub file_requests: Vec<FileRequest>,
     pub workspace: Option<Workspace>,
     pub applications: Vec<Application>,
     pub diagnostics: Vec<Diagnostic>,

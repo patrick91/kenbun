@@ -33,15 +33,11 @@ class RemoteAnalysis:
         self._max_rounds = max_rounds
         self._current = self._analyze()
         self._validate_current()
-        self._round_number = 1 if self.needs_more else 0
+        self._round_number = 1 if self.file_requests else 0
 
     @property
-    def needs_more(self) -> bool:
-        return self._current.status == "needs_files"
-
-    @property
-    def requests(self) -> list[FileRequest]:
-        return self._current.requests
+    def file_requests(self) -> list[FileRequest]:
+        return self._current.file_requests
 
     @property
     def round_number(self) -> int:
@@ -49,21 +45,21 @@ class RemoteAnalysis:
 
     @property
     def result(self) -> ScanResult:
-        if self.needs_more:
+        if self.file_requests:
             raise RuntimeError("Remote analysis is not complete")
         return self._current
 
     def update(self, contents: Mapping[str, bytes | None]) -> None:
-        if not self.needs_more:
+        if not self.file_requests:
             raise RuntimeError("Remote analysis is already complete")
 
         response = dict(contents)
-        requests = {request.path: request for request in self.requests}
-        missing = requests.keys() - response.keys()
+        requests_by_path = {request.path: request for request in self.file_requests}
+        missing = requests_by_path.keys() - response.keys()
         if missing:
             paths = ", ".join(sorted(missing))
             raise ValueError(f"Missing responses for requested files: {paths}")
-        unexpected = response.keys() - requests.keys()
+        unexpected = response.keys() - requests_by_path.keys()
         if unexpected:
             paths = ", ".join(sorted(unexpected))
             raise ValueError(f"Received unrequested files: {paths}")
@@ -71,10 +67,10 @@ class RemoteAnalysis:
         for path, content in response.items():
             if content is not None and not isinstance(content, bytes):
                 raise TypeError(f"Content for {path!r} must be bytes or None")
-            if content is not None and len(content) > requests[path].max_bytes:
+            if content is not None and len(content) > requests_by_path[path].max_bytes:
                 raise ValueError(
                     f"Content for {path!r} exceeds its "
-                    f"{requests[path].max_bytes}-byte limit"
+                    f"{requests_by_path[path].max_bytes}-byte limit"
                 )
 
         self._contents.update(response)
@@ -84,14 +80,14 @@ class RemoteAnalysis:
         resolved_paths = self._contents.keys()
         repeated = [
             request.path
-            for request in self._current.requests
+            for request in self._current.file_requests
             if request.path in resolved_paths
         ]
         if repeated:
             paths = ", ".join(repeated)
             raise RuntimeError(f"Kenbun requested already resolved files: {paths}")
 
-        if self.needs_more:
+        if self.file_requests:
             self._round_number += 1
             if self._round_number > self._max_rounds:
                 raise RuntimeError(
@@ -107,8 +103,12 @@ class RemoteAnalysis:
         )
 
     def _validate_current(self) -> None:
-        if self.needs_more and not self.requests:
-            raise RuntimeError("Kenbun requested files without returning any requests")
+        if self._current.status == "needs_files" and not self.file_requests:
+            raise RuntimeError(
+                "Kenbun requested files without returning any file requests"
+            )
+        if self._current.status == "complete" and self.file_requests:
+            raise RuntimeError("Kenbun returned file requests for a complete analysis")
 
 
 def remote_analysis(

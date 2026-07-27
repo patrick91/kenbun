@@ -126,7 +126,7 @@ class ScanResult:
     scan_origin: str
     status: Literal["needs_files", "complete"]
     completeness: Literal["complete", "partial"]
-    requests: list[FileRequest]
+    file_requests: list[FileRequest]
     workspace: Workspace | None
     applications: list[Application]
     diagnostics: list[Diagnostic]

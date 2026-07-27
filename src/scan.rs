@@ -58,7 +58,7 @@ pub fn analyze(fs: &FileSet, inventory_complete: bool) -> ScanResult {
                 scan_origin: ".".to_string(),
                 status: "complete".to_string(),
                 completeness: "complete".to_string(),
-                requests: Vec::new(),
+                file_requests: Vec::new(),
                 workspace: None,
                 applications: Vec::new(),
                 diagnostics: Vec::new(),
@@ -76,8 +76,8 @@ fn finish_virtual_result(
     fs: &FileSet,
     inventory_complete: bool,
 ) -> ScanResult {
-    result.requests = fs.requests();
-    result.status = if result.requests.is_empty() {
+    result.file_requests = fs.requests();
+    result.status = if result.file_requests.is_empty() {
         "complete".to_string()
     } else {
         "needs_files".to_string()
@@ -89,7 +89,7 @@ fn finish_virtual_result(
     if !inventory_complete
         || fs.unavailable_seen()
         || identity_parse_failed
-        || !result.requests.is_empty()
+        || !result.file_requests.is_empty()
     {
         result.completeness = "partial".to_string();
     }
@@ -295,7 +295,7 @@ fn scan_fileset(
         scan_origin,
         status: "complete".to_string(),
         completeness: "complete".to_string(),
-        requests: Vec::new(),
+        file_requests: Vec::new(),
         workspace: ws_info,
         applications,
         diagnostics: all_diags,

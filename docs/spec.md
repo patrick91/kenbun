@@ -40,7 +40,7 @@ def scan(
 ```
 
 `root` must identify a real directory. Local scans satisfy reads immediately
-and therefore return `status="complete"` with no `requests`.
+and therefore return `status="complete"` with no `file_requests`.
 
 `application_dir` is an optional path relative to the caller-supplied scan root.
 Kenbun translates it into the effective workspace root, validates that it
@@ -94,9 +94,9 @@ caller. A path omitted from `contents` has not been fetched. `None` means the
 caller cannot provide the content and prevents that path from being requested
 again. The stateless primitive treats oversized contents as unavailable.
 
-`remote_analysis()` creates a stateful analysis over that inventory. While
-`needs_more` is true, `requests` contains the current ordered
-`list[FileRequest]`. `update()` requires one `bytes | None` response for every
+`remote_analysis()` creates a stateful analysis over that inventory. Its
+`file_requests` property contains the current ordered `list[FileRequest]`.
+`update()` requires one `bytes | None` response for every
 request, rejects contents larger than that request's `max_bytes`, accumulates
 the response, and advances the analysis. `result` is available only after
 completion. The session owns round limits, progress validation, and the
@@ -104,8 +104,8 @@ accumulated contents.
 
 `analyze()` is pure and stateless. A caller repeats the call with accumulated
 contents until `status="complete"`. Every unresolved path is requested at
-most once per input state, and `status="needs_files"` always has a non-empty
-`requests`. Ignore rules and manifests are requested before scripts.
+most once per input state, and `status="needs_files"` always has non-empty
+`file_requests`. Ignore rules and manifests are requested before scripts.
 
 `inventory_complete=False` states that paths may be missing from the supplied
 inventory, for example after a truncated remote tree response. Such an input
@@ -136,7 +136,7 @@ ScanResult
 ├─ scan_origin: str                       # root relative to upload root
 ├─ status: "needs_files" | "complete"
 ├─ completeness: "complete" | "partial"
-├─ requests: list[FileRequest]
+├─ file_requests: list[FileRequest]
 ├─ workspace: Workspace | None
 ├─ applications: list[Application]        # sorted by application_dir
 └─ diagnostics: list[Diagnostic]          # aggregate, deduplicated, stable order

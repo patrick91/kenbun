@@ -46,8 +46,8 @@ analysis = kenbun.remote_analysis(
     hints={"script_patterns": ["main.py", "app.py", "api.py"]},
 )
 
-while analysis.needs_more:
-    contents = fetch_files(analysis.requests)
+while file_requests := analysis.file_requests:
+    contents = fetch_files(file_requests)
     analysis.update(contents)
 
 result = analysis.result
@@ -92,7 +92,7 @@ kept separate and must independently qualify as an application.
 
 ## Output model
 
-- `ScanResult` contains protocol status/completeness, ordered `requests`,
+- `ScanResult` contains protocol status/completeness, ordered `file_requests`,
   scan paths, optional `Workspace`, ordered `applications`, and diagnostics.
 - `Application` contains `technologies`, optional entrypoint, one or more
   ecosystem-specific `DependencySet` values, explicit `build_scripts`, Python

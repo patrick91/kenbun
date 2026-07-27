@@ -17,22 +17,19 @@ def test_remote_analysis_drives_incremental_analysis() -> None:
         hints={"script_patterns": ["app.py"]},
     )
 
-    assert analysis.needs_more
     assert analysis.round_number == 1
-    assert [request.path for request in analysis.requests] == ["pyproject.toml"]
+    assert [request.path for request in analysis.file_requests] == ["pyproject.toml"]
     with pytest.raises(RuntimeError, match="not complete"):
         _ = analysis.result
 
     analysis.update({"pyproject.toml": FASTAPI_MANIFEST})
 
-    assert analysis.needs_more
     assert analysis.round_number == 2
-    assert [request.path for request in analysis.requests] == ["app.py"]
+    assert [request.path for request in analysis.file_requests] == ["app.py"]
 
     analysis.update({"app.py": FASTAPI_APP})
 
-    assert not analysis.needs_more
-    assert analysis.requests == []
+    assert analysis.file_requests == []
     assert analysis.result.applications[0].entrypoint.as_string == "app:app"
 
 
@@ -41,7 +38,7 @@ def test_remote_analysis_accepts_unavailable_content() -> None:
 
     analysis.update({"pyproject.toml": None})
 
-    assert not analysis.needs_more
+    assert analysis.file_requests == []
     assert analysis.result.completeness == "partial"
 
 
@@ -75,7 +72,7 @@ def test_remote_analysis_enforces_round_limit() -> None:
         analysis.update(
             {
                 request.path: b'[project]\nname = "library"\n'
-                for request in analysis.requests
+                for request in analysis.file_requests
             }
         )
 

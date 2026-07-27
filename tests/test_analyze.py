@@ -23,14 +23,14 @@ def test_manifest_only_pass_does_not_request_scripts() -> None:
     first = kenbun.analyze(files)
     assert first.status == "needs_files"
     assert first.completeness == "partial"
-    assert [(request.path, request.priority) for request in first.requests] == [
+    assert [(request.path, request.priority) for request in first.file_requests] == [
         ("pyproject.toml", 10)
     ]
 
     result = kenbun.analyze(files, {"pyproject.toml": FASTAPI_MANIFEST})
     assert result.status == "complete"
     assert result.completeness == "complete"
-    assert result.requests == []
+    assert result.file_requests == []
     assert len(result.applications) == 1
     assert result.applications[0].name == "demo"
     assert result.applications[0].entrypoint is None
@@ -52,9 +52,9 @@ def test_script_hints_drive_incremental_entrypoint_resolution() -> None:
     hints = {"script_patterns": ["app.py"]}
 
     requested = kenbun.analyze(files, contents, hints=hints)
-    assert [(request.path, request.priority) for request in requested.requests] == [
-        ("services/api/app.py", 40)
-    ]
+    assert [
+        (request.path, request.priority) for request in requested.file_requests
+    ] == [("services/api/app.py", 40)]
 
     contents["services/api/app.py"] = FASTAPI_APP
     result = kenbun.analyze(files, contents, hints=hints)
@@ -76,19 +76,21 @@ def test_script_hints_are_ordered_patterns_and_batched() -> None:
         hints={"script_patterns": ["**/*.py"]},
     )
     assert first.status == "needs_files"
-    assert len(first.requests) == 16
+    assert len(first.file_requests) == 16
 
     contents = {
         **manifest,
-        **{request.path: b"print('ok')\n" for request in first.requests},
+        **{request.path: b"print('ok')\n" for request in first.file_requests},
     }
     second = kenbun.analyze(
         files,
         contents,
         hints={"script_patterns": ["**/*.py"]},
     )
-    assert len(second.requests) == 4
-    assert not set(contents).intersection(request.path for request in second.requests)
+    assert len(second.file_requests) == 4
+    assert not set(contents).intersection(
+        request.path for request in second.file_requests
+    )
 
 
 def test_script_hints_do_not_bypass_the_manifest_quick_pass() -> None:
@@ -98,7 +100,7 @@ def test_script_hints_do_not_bypass_the_manifest_quick_pass() -> None:
 
     assert result.status == "complete"
     assert result.completeness == "complete"
-    assert result.requests == []
+    assert result.file_requests == []
 
 
 def test_non_framework_manifest_does_not_request_scripts() -> None:
@@ -112,7 +114,7 @@ def test_non_framework_manifest_does_not_request_scripts() -> None:
 
     assert result.status == "complete"
     assert result.completeness == "complete"
-    assert result.requests == []
+    assert result.file_requests == []
 
 
 def test_lockfiles_are_not_requested() -> None:
@@ -122,7 +124,7 @@ def test_lockfiles_are_not_requested() -> None:
 
     assert result.status == "complete"
     assert result.completeness == "complete"
-    assert result.requests == []
+    assert result.file_requests == []
 
 
 def test_unavailable_content_terminates_with_partial_result() -> None:
@@ -132,7 +134,7 @@ def test_unavailable_content_terminates_with_partial_result() -> None:
 
     assert result.status == "complete"
     assert result.completeness == "partial"
-    assert result.requests == []
+    assert result.file_requests == []
 
 
 def test_invalid_utf8_content_is_partial() -> None:
@@ -142,7 +144,7 @@ def test_invalid_utf8_content_is_partial() -> None:
 
     assert result.status == "complete"
     assert result.completeness == "partial"
-    assert result.requests == []
+    assert result.file_requests == []
 
 
 def test_malformed_identity_manifest_is_partial() -> None:
@@ -170,11 +172,11 @@ def test_ignore_files_are_requested_before_manifests_and_filter_inventory() -> N
     ]
 
     first = kenbun.analyze(files)
-    assert [request.path for request in first.requests] == [".gitignore"]
+    assert [request.path for request in first.file_requests] == [".gitignore"]
 
     result = kenbun.analyze(files, {".gitignore": b"ignored/\n"})
     assert result.status == "complete"
-    assert result.requests == []
+    assert result.file_requests == []
     assert result.applications == []
 
 
@@ -201,13 +203,14 @@ def test_manifest_requests_continue_past_the_first_batch() -> None:
     files = [entry(f"packages/{index:02}/pyproject.toml") for index in range(65)]
 
     first = kenbun.analyze(files)
-    assert len(first.requests) == 64
+    assert len(first.file_requests) == 64
 
     contents = {
-        request.path: b'[project]\nname = "library"\n' for request in first.requests
+        request.path: b'[project]\nname = "library"\n'
+        for request in first.file_requests
     }
     second = kenbun.analyze(files, contents)
-    assert [request.path for request in second.requests] == [
+    assert [request.path for request in second.file_requests] == [
         "packages/64/pyproject.toml"
     ]
 

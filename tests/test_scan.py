@@ -539,7 +539,7 @@ def test_to_json_shape(tmp_path: Path) -> None:
     assert data["schema_version"] == 3
     assert data["status"] == "complete"
     assert data["completeness"] == "complete"
-    assert data["requests"] == []
+    assert data["file_requests"] == []
     assert data["applications"][0]["application_dir"] == "."
     assert data["applications"][0]["entrypoint"]["as_string"] == "main:app"
     assert data["applications"][0]["node"] is None
