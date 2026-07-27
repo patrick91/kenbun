@@ -40,9 +40,9 @@ For remote repositories, pass an inventory first and feed requested contents
 back into the stateless analyzer:
 
 ```python
-files = [
-    kenbun.FileEntry("pyproject.toml", 128, "git-blob-sha"),
-    kenbun.FileEntry("app.py", 512, "another-blob-sha"),
+files: list[kenbun.FileEntry] = [
+    kenbun.FileEntry(path="pyproject.toml", size=128, blob_sha="git-blob-sha"),
+    kenbun.FileEntry(path="app.py", size=512, blob_sha="another-blob-sha"),
 ]
 contents: dict[str, bytes | None] = {}
 
@@ -60,7 +60,7 @@ while True:
 ```
 
 `scan()` walks a real directory. `analyze()` is sans-I/O and incrementally
-requests only the contents it needs. Both return schema v2 `ScanResult`
+requests only the contents it needs. Both return schema v3 `ScanResult`
 objects with deterministic ordering and canonical JSON.
 
 ## Supported detection
@@ -106,7 +106,7 @@ kept separate and must independently qualify as an application.
 - `BuildScript` records the explicit `build` script as data: the raw command,
   optional safely parsed argv, optional inferred package manager, and source.
 
-See the [v2 specification](docs/spec.md) for the normative model and detection
+See the [v3 specification](docs/spec.md) for the normative model and detection
 rules.
 
 ## External fixture corpus

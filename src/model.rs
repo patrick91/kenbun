@@ -3,7 +3,7 @@
 use pyo3::prelude::*;
 use serde::Serialize;
 
-pub const SCHEMA_VERSION: u32 = 2;
+pub const SCHEMA_VERSION: u32 = 3;
 
 #[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
@@ -82,26 +82,9 @@ pub struct DeclaredDep {
 
 #[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
-pub struct ResolvedDep {
-    pub name: String,
-    pub version: String,
-    pub source: String,
-    pub marker: Option<String>,
-}
-
-#[pyclass(get_all, frozen, skip_from_py_object)]
-#[derive(Clone, Debug, Serialize)]
 pub struct ManifestRef {
     pub path: String,
     pub kind: String,
-}
-
-#[pyclass(get_all, frozen, skip_from_py_object)]
-#[derive(Clone, Debug, Serialize)]
-pub struct LockfileRef {
-    pub path: String,
-    pub kind: String,
-    pub parsed: bool,
 }
 
 #[pyclass(get_all, frozen, skip_from_py_object)]
@@ -110,9 +93,7 @@ pub struct DependencySet {
     pub ecosystem: String,
     pub package_manager: Option<String>,
     pub manifests: Vec<ManifestRef>,
-    pub lockfiles: Vec<LockfileRef>,
     pub declared: Vec<DeclaredDep>,
-    pub resolved: Vec<ResolvedDep>,
 }
 
 #[pyclass(get_all, frozen, skip_from_py_object)]
@@ -204,29 +185,11 @@ pub struct Workspace {
     pub members: Vec<String>,
 }
 
-#[pyclass(get_all, frozen, skip_from_py_object)]
-#[derive(Clone, Debug, Serialize)]
-pub struct FileEntry {
-    pub path: String,
-    pub size: u64,
-    pub blob_sha: Option<String>,
-}
-
-#[pymethods]
-impl FileEntry {
-    #[new]
-    #[pyo3(signature = (path, size, blob_sha=None))]
-    fn new(path: String, size: u64, blob_sha: Option<String>) -> Self {
-        Self {
-            path,
-            size,
-            blob_sha,
-        }
-    }
-
-    fn __repr__(&self) -> String {
-        format!("FileEntry(path={:?}, size={})", self.path, self.size)
-    }
+#[derive(Clone, Debug)]
+pub(crate) struct FileEntry {
+    pub(crate) path: String,
+    pub(crate) size: u64,
+    pub(crate) blob_sha: Option<String>,
 }
 
 #[pyclass(get_all, frozen, skip_from_py_object)]

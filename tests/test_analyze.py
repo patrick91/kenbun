@@ -6,15 +6,15 @@ import pytest
 
 import kenbun
 
-FASTAPI_MANIFEST = b'''[project]
+FASTAPI_MANIFEST = b"""[project]
 name = "demo"
 dependencies = ["fastapi"]
-'''
+"""
 FASTAPI_APP = b"from fastapi import FastAPI\napp = FastAPI()\n"
 
 
 def entry(path: str, size: int = 64) -> kenbun.FileEntry:
-    return kenbun.FileEntry(path, size, f"sha-{path}")
+    return {"path": path, "size": size, "blob_sha": f"sha-{path}"}
 
 
 def test_manifest_only_pass_does_not_request_scripts() -> None:
@@ -115,6 +115,16 @@ def test_non_framework_manifest_does_not_request_scripts() -> None:
     assert result.want_files == []
 
 
+def test_lockfiles_are_not_requested() -> None:
+    files = [entry("pyproject.toml"), entry("uv.lock")]
+
+    result = kenbun.analyze(files, {"pyproject.toml": FASTAPI_MANIFEST})
+
+    assert result.status == "complete"
+    assert result.completeness == "complete"
+    assert result.want_files == []
+
+
 def test_unavailable_content_terminates_with_partial_result() -> None:
     files = [entry("pyproject.toml")]
 
@@ -194,12 +204,10 @@ def test_manifest_requests_continue_past_the_first_batch() -> None:
     assert len(first.want_files) == 64
 
     contents = {
-        want.path: b"[project]\nname = \"library\"\n" for want in first.want_files
+        want.path: b'[project]\nname = "library"\n' for want in first.want_files
     }
     second = kenbun.analyze(files, contents)
-    assert [want.path for want in second.want_files] == [
-        "packages/64/pyproject.toml"
-    ]
+    assert [want.path for want in second.want_files] == ["packages/64/pyproject.toml"]
 
     contents["packages/64/pyproject.toml"] = FASTAPI_MANIFEST
     result = kenbun.analyze(files, contents)
@@ -210,6 +218,14 @@ def test_manifest_requests_continue_past_the_first_batch() -> None:
 
 
 def test_invalid_inputs_fail_loudly() -> None:
+    with pytest.raises(TypeError, match=r"files\[0\] must be a dict"):
+        kenbun.analyze([("pyproject.toml", 64)])
+    with pytest.raises(KeyError, match="missing required key 'path'"):
+        kenbun.analyze([{"size": 64}])
+    with pytest.raises(TypeError, match="must be a non-negative integer"):
+        kenbun.analyze([{"path": "pyproject.toml", "size": -1}])
+    with pytest.raises(TypeError, match="must be a string or None"):
+        kenbun.analyze([{"path": "pyproject.toml", "size": 64, "blob_sha": 42}])
     with pytest.raises(ValueError, match="repository-relative"):
         kenbun.analyze([entry("../pyproject.toml")])
     with pytest.raises(ValueError, match="unknown analysis hint"):

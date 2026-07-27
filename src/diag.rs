@@ -163,16 +163,6 @@ pub fn kb301(path: &str, framework: &str, group: &str) -> Diagnostic {
     )
 }
 
-pub fn kb305(path: &str, lockfiles: &[String]) -> Diagnostic {
-    new(
-        "KB305",
-        WARNING,
-        format!("multiple lockfiles present: {}", lockfiles.join(", ")),
-        Some(path.to_string()),
-        None,
-    )
-}
-
 pub fn kb306(path: &str, manager: &str) -> Diagnostic {
     new(
         "KB306",
@@ -190,19 +180,6 @@ pub fn kb307(path: &str, framework: &str) -> Diagnostic {
         format!(
             "no installable dependency source for this application: {framework} is declared \
              only in sources standard installers do not read"
-        ),
-        Some(path.to_string()),
-        None,
-    )
-}
-
-pub fn kb308(path: &str, candidates: &[String]) -> Diagnostic {
-    new(
-        "KB308",
-        WARNING,
-        format!(
-            "Node package manager is ambiguous: {}",
-            candidates.join(", ")
         ),
         Some(path.to_string()),
         None,

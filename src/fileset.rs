@@ -340,23 +340,9 @@ fn request_kind(path: &str) -> (&'static str, u32) {
         ("application manifest", 10)
     } else if matches!(
         name,
-        "uv.lock"
-            | "pylock.toml"
-            | "poetry.lock"
-            | "pdm.lock"
-            | "Pipfile.lock"
-            | "package-lock.json"
-            | "npm-shrinkwrap.json"
-            | "pnpm-lock.yaml"
-            | "yarn.lock"
-            | "bun.lock"
-            | "bun.lockb"
-            | ".python-version"
-            | ".node-version"
-            | ".nvmrc"
-            | ".tool-versions"
+        ".python-version" | ".node-version" | ".nvmrc" | ".tool-versions"
     ) {
-        ("runtime or lock metadata", 20)
+        ("runtime metadata", 20)
     } else if is_script(path) {
         ("script discovery hint", 40)
     } else {

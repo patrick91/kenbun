@@ -349,6 +349,24 @@ def test_dependency_group_only_kb301(tmp_path: Path) -> None:
     assert technology(app(result), "fastapi").confidence == "medium"
 
 
+def test_uv_dev_dependency_is_installable_without_a_lockfile(tmp_path: Path) -> None:
+    make(
+        tmp_path,
+        {
+            "pyproject.toml": (
+                '[project]\nname = "x"\ndependencies = []\n'
+                '[tool.uv]\ndev-dependencies = ["fastapi"]\n'
+            ),
+            "main.py": APP_MAIN,
+        },
+    )
+
+    result = kenbun.scan(tmp_path)
+
+    assert "KB301" not in codes(result)
+    assert "KB307" not in codes(result)
+
+
 def test_python_version_conflict_kb700(tmp_path: Path) -> None:
     make(
         tmp_path,
@@ -406,21 +424,19 @@ def test_python_tool_version_conflicts_with_requires_python(tmp_path: Path) -> N
     assert ".tool-versions pins 3.11.9" in diagnostic.message
 
 
-def test_uv_lock_resolved_versions(tmp_path: Path) -> None:
+def test_lockfiles_are_ignored(tmp_path: Path) -> None:
     make(
         tmp_path,
         {
             "pyproject.toml": FASTAPI_PYPROJECT,
             "main.py": APP_MAIN,
-            "uv.lock": (
-                'version = 1\n\n[[package]]\nname = "fastapi"\nversion = "0.115.8"\n'
-                '\n[[package]]\nname = "starlette"\nversion = "0.45.0"\n'
-            ),
+            "uv.lock": "not valid TOML\n",
         },
     )
     result = kenbun.scan(tmp_path)
-    resolved = dependencies(app(result)).resolved
-    assert ("fastapi", "0.115.8") in [(r.name, r.version) for r in resolved]
+    dependency_set = dependencies(app(result))
+    assert not hasattr(dependency_set, "lockfiles")
+    assert not hasattr(dependency_set, "resolved")
 
 
 # ── workspaces + origins ────────────────────────────────────────────────────
@@ -520,13 +536,15 @@ def test_to_json_shape(tmp_path: Path) -> None:
 
     make(tmp_path, {"pyproject.toml": FASTAPI_PYPROJECT, "main.py": APP_MAIN})
     data = json.loads(kenbun.scan(tmp_path).to_json())
-    assert data["schema_version"] == 2
+    assert data["schema_version"] == 3
     assert data["status"] == "complete"
     assert data["completeness"] == "complete"
     assert data["want_files"] == []
     assert data["applications"][0]["application_dir"] == "."
     assert data["applications"][0]["entrypoint"]["as_string"] == "main:app"
     assert data["applications"][0]["node"] is None
+    assert "lockfiles" not in data["applications"][0]["dependencies"][0]
+    assert "resolved" not in data["applications"][0]["dependencies"][0]
     assert [item["name"] for item in data["applications"][0]["technologies"]] == [
         "fastapi",
         "python",
@@ -886,18 +904,6 @@ def test_remaining_diagnostic_codes_have_regression_coverage(tmp_path: Path) -> 
     tableless = tmp_path / "tableless"
     make(tableless, {"pyproject.toml": '[tool.demo]\nname = "x"\n'})
     assert "KB202" in codes(kenbun.scan(tableless))
-
-    locks = tmp_path / "locks"
-    make(
-        locks,
-        {
-            "pyproject.toml": FASTAPI_PYPROJECT,
-            "main.py": APP_MAIN,
-            "uv.lock": "version = 1\n",
-            "pdm.lock": "",
-        },
-    )
-    assert "KB305" in codes(kenbun.scan(locks))
 
     workspace = tmp_path / "workspace"
     make(

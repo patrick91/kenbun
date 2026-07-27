@@ -11,15 +11,6 @@ use serde_json::{Map, Value};
 use crate::fileset::FileSet;
 use crate::runtime::{self, RuntimePin};
 
-const LOCKFILE_NAMES: &[(&str, &str)] = &[
-    ("package-lock.json", "npm"),
-    ("npm-shrinkwrap.json", "npm"),
-    ("pnpm-lock.yaml", "pnpm"),
-    ("yarn.lock", "yarn"),
-    ("bun.lock", "bun"),
-    ("bun.lockb", "bun"),
-];
-
 const CONFIG_EXTENSIONS: &[&str] = &["js", "mjs", "cjs", "ts", "mts", "cts"];
 const CONFIG_PREFIXES: &[&str] = &[
     "astro",
@@ -55,14 +46,8 @@ pub(crate) struct RawNodePackage {
     pub requires_node: Option<String>,
     pub version_pins: Vec<RuntimePin>,
     pub package_manager: Option<RawPackageManager>,
-    /// Candidates at the nearest lock/workspace evidence level. More than one
-    /// means the evidence was ambiguous and `package_manager` is None.
-    pub package_manager_candidates: Vec<String>,
-    pub package_manager_evidence: Vec<String>,
     pub declares_workspace: bool,
     pub workspace_patterns: Vec<String>,
-    /// Same-directory lockfile paths.
-    pub lockfiles: Vec<String>,
     /// Same-directory framework/build/language config paths.
     pub config_files: Vec<String>,
     pub index_html: Option<String>,
@@ -84,8 +69,6 @@ pub(crate) struct RawNodeWorkspace {
     pub unmatched_patterns: Vec<String>,
     pub has_root_package: bool,
     pub package_manager: Option<RawPackageManager>,
-    pub package_manager_candidates: Vec<String>,
-    pub package_manager_evidence: Vec<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -235,12 +218,10 @@ pub(crate) fn discover(fs: &FileSet) -> RawNodeDiscovery {
 
     let mut packages = Vec::new();
     for (dir, manifest) in &manifests {
-        let lockfiles = same_root_lockfiles(fs, dir);
         let config_files = same_root_config_files(fs, dir);
         let index_html_path = join(dir, "index.html");
         let index_html = fs.contains(&index_html_path).then_some(index_html_path);
-        let (package_manager, manager_candidates, manager_evidence) =
-            infer_package_manager(fs, dir, &manifests);
+        let package_manager = infer_package_manager(fs, dir, &manifests);
         let version_pins = runtime::node_version_pins(fs, dir);
         let language = classify_language(
             fs,
@@ -273,11 +254,8 @@ pub(crate) fn discover(fs: &FileSet) -> RawNodeDiscovery {
             requires_node: manifest.requires_node.clone(),
             version_pins,
             package_manager,
-            package_manager_candidates: manager_candidates,
-            package_manager_evidence: manager_evidence,
             declares_workspace: manifest.declares_workspace,
             workspace_patterns: manifest.workspace_patterns.clone(),
-            lockfiles,
             config_files,
             index_html,
             language,
@@ -301,7 +279,7 @@ pub(crate) fn discover(fs: &FileSet) -> RawNodeDiscovery {
                 .into_iter()
                 .map(|message| raw_error(&error_path, message)),
         );
-        let (package_manager, candidates, evidence) = infer_package_manager(fs, &dir, &manifests);
+        let package_manager = infer_package_manager(fs, &dir, &manifests);
         workspaces.push(RawNodeWorkspace {
             path: display_dir(&dir),
             sources,
@@ -310,8 +288,6 @@ pub(crate) fn discover(fs: &FileSet) -> RawNodeDiscovery {
             unmatched_patterns: unmatched,
             has_root_package: manifests.contains_key(&dir),
             package_manager,
-            package_manager_candidates: candidates,
-            package_manager_evidence: evidence,
         });
     }
 
@@ -755,16 +731,6 @@ fn expand_braces(pattern: &str) -> Vec<String> {
     expanded
 }
 
-fn same_root_lockfiles(fs: &FileSet, dir: &str) -> Vec<String> {
-    let mut out: Vec<String> = LOCKFILE_NAMES
-        .iter()
-        .map(|(name, _)| join(dir, name))
-        .filter(|path| fs.contains(path))
-        .collect();
-    out.sort();
-    out
-}
-
 fn same_root_config_files(fs: &FileSet, dir: &str) -> Vec<String> {
     let mut out = Vec::new();
     for path in direct_files(fs, dir) {
@@ -787,7 +753,7 @@ fn infer_package_manager(
     fs: &FileSet,
     dir: &str,
     manifests: &BTreeMap<String, PackageManifest>,
-) -> (Option<RawPackageManager>, Vec<String>, Vec<String>) {
+) -> Option<RawPackageManager> {
     let ancestors = ancestors_inclusive(dir);
 
     for ancestor in &ancestors {
@@ -799,71 +765,26 @@ fn infer_package_manager(
         };
         if let Some(manager) = known_manager_from_package_manager(raw) {
             let source = join(ancestor, "package.json");
-            return (
-                Some(RawPackageManager {
-                    name: manager.to_string(),
-                    source: source.clone(),
-                    explicit: true,
-                }),
-                vec![manager.to_string()],
-                vec![format!("{source}:packageManager={raw}")],
-            );
+            return Some(RawPackageManager {
+                name: manager.to_string(),
+                source,
+                explicit: true,
+            });
         }
     }
 
     for ancestor in ancestors {
-        let evidence = manager_evidence_at(fs, &ancestor);
-        if evidence.is_empty() {
-            continue;
+        let source = join(&ancestor, "pnpm-workspace.yaml");
+        if fs.contains(&source) {
+            return Some(RawPackageManager {
+                name: "pnpm".to_string(),
+                source,
+                explicit: false,
+            });
         }
-        let candidates: Vec<String> = evidence.keys().cloned().collect();
-        let details: Vec<String> = evidence.values().flatten().cloned().collect();
-        if candidates.len() == 1 {
-            let name = candidates[0].clone();
-            let source = details
-                .first()
-                .cloned()
-                .unwrap_or_else(|| display_dir(&ancestor));
-            return (
-                Some(RawPackageManager {
-                    name,
-                    source,
-                    explicit: false,
-                }),
-                candidates,
-                details,
-            );
-        }
-        // Conflicting evidence at the nearest evidence-bearing directory is
-        // intentionally not resolved using a farther-away ancestor.
-        return (None, candidates, details);
     }
 
-    (None, Vec::new(), Vec::new())
-}
-
-fn manager_evidence_at(fs: &FileSet, dir: &str) -> BTreeMap<String, Vec<String>> {
-    let mut evidence: BTreeMap<String, Vec<String>> = BTreeMap::new();
-    for (file, manager) in LOCKFILE_NAMES {
-        let path = join(dir, file);
-        if fs.contains(&path) {
-            evidence
-                .entry((*manager).to_string())
-                .or_default()
-                .push(path);
-        }
-    }
-    let pnpm_workspace = join(dir, "pnpm-workspace.yaml");
-    if fs.contains(&pnpm_workspace) {
-        evidence
-            .entry("pnpm".to_string())
-            .or_default()
-            .push(pnpm_workspace);
-    }
-    for values in evidence.values_mut() {
-        values.sort();
-    }
-    evidence
+    None
 }
 
 fn known_manager_from_package_manager(raw: &str) -> Option<&'static str> {

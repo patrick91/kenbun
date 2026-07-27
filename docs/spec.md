@@ -1,6 +1,6 @@
-# Kenbun specification (schema v2)
+# Kenbun specification (schema v3)
 
-This document defines the public schema and detection behavior for Kenbun v2.
+This document defines the public schema and detection behavior for Kenbun v3.
 Kenbun is a static repository analyzer implemented in Rust with typed Python
 bindings. It discovers applications and reports evidence; it does not make
 deployment decisions.
@@ -68,6 +68,13 @@ workspace root upward. `root` remains the caller's original path;
 ### Remote and incremental input
 
 ```python
+class _RequiredFileEntry(TypedDict):
+    path: str
+    size: int
+
+class FileEntry(_RequiredFileEntry, total=False):
+    blob_sha: str | None
+
 class AnalysisHints(TypedDict, total=False):
     script_patterns: list[str]
 
@@ -80,11 +87,11 @@ def analyze(
 ) -> ScanResult: ...
 ```
 
-`FileEntry` contains a normalized repository-relative POSIX `path`, byte
-`size`, and optional caller-owned `blob_sha`. A path omitted from `contents`
-has not been fetched. `None` means the caller cannot provide the content and
-prevents that path from being requested again. Contents larger than 2 MiB are
-treated as unavailable.
+`FileEntry` is a typed mapping containing a normalized repository-relative
+POSIX `path`, byte `size`, and optional caller-owned `blob_sha`. A path omitted
+from `contents` has not been fetched. `None` means the caller cannot provide
+the content and prevents that path from being requested again. Contents larger
+than 2 MiB are treated as unavailable.
 
 `analyze()` is pure and stateless. A caller repeats the call with accumulated
 contents until `status="complete"`. Every unresolved path is requested at
@@ -107,13 +114,14 @@ without a hint. Invalid or unknown hints raise `ValueError`.
 
 ## 3. Public output model
 
-All public records are frozen PyO3 classes and have corresponding type stubs.
+All public output records are frozen PyO3 classes and have corresponding type
+stubs.
 `ScanResult.to_json()` emits compact schema-versioned JSON in declaration
 order.
 
 ```text
 ScanResult
-├─ schema_version: int                    # exactly 2
+├─ schema_version: int                    # exactly 3
 ├─ root: str                              # path supplied to scan()
 ├─ upload_root: str                       # "." or path from root to workspace root
 ├─ scan_origin: str                       # root relative to upload root
@@ -149,12 +157,10 @@ DependencySet
 ├─ ecosystem: "python" | "node"
 ├─ package_manager: str | None
 ├─ manifests: list[ManifestRef]
-├─ lockfiles: list[LockfileRef]
-├─ declared: list[DeclaredDep]
-└─ resolved: list[ResolvedDep]
+└─ declared: list[DeclaredDep]
 
 BuildScript
-├─ name: str                              # v2 emits only "build"
+├─ name: str                              # v3 emits only "build"
 ├─ command: str                           # exact package.json script value
 ├─ package_manager: str | None
 ├─ argv: list[str] | None                 # only when safely representable
@@ -214,7 +220,7 @@ with supporting Node/Vite facts, while independently qualified `backend/` and
 ## 5. Python detection
 
 Python dependency evidence is read from supported `pyproject.toml` tables,
-requirements files, Pipfile, and recognized lockfiles. Dependency names are
+requirements files, and Pipfile. Dependency names are
 PEP 503 normalized. Poetry and PDM metadata is parsed as data; `setup.py` may
 be string-scanned for weak evidence but is never executed.
 
@@ -255,8 +261,8 @@ Django and Flask do not receive inferred `Entrypoint` values in v1.
 
 ## 6. Node detection
 
-Node evidence is read from `package.json`, workspace manifests, and supported
-lockfiles. Only declarative dependency and script data is used.
+Node evidence is read from `package.json` and workspace manifests. Only
+declarative dependency and script data is used.
 
 | Direct package signal | Normalized technology | Usual supporting facts |
 |---|---|---|
@@ -312,7 +318,7 @@ Kenbun recognizes:
 
 - uv workspaces from `[tool.uv.workspace]`.
 - npm, Yarn, and Bun workspaces from `package.json` workspace declarations,
-  disambiguated by explicit manager or lockfile evidence.
+  using an explicit `packageManager` when present.
 - pnpm workspaces from `pnpm-workspace.yaml`.
 
 Members are expanded deterministically and recorded in `Workspace.members`.
@@ -329,11 +335,9 @@ Node package-manager inference uses this precedence:
 
 1. The nearest `package.json` with an explicit `packageManager`, walking from
    the application directory toward the effective root.
-2. Otherwise, the nearest directory with lockfile or workspace evidence, but
-   only when exactly one of npm, pnpm, Yarn, or Bun is represented.
+2. Otherwise, a `pnpm-workspace.yaml` manifest identifies pnpm.
 
-Conflicting evidence produces no inferred manager and a diagnostic. Kenbun
-must not default to npm merely because `package.json` exists.
+Kenbun must not default to npm merely because `package.json` exists.
 
 ## 8. Build scripts
 
@@ -355,7 +359,7 @@ presentation facts. Application diagnostics are also aggregated onto
 
 - discovery: `KB100`, `KB101`, `KB102`, `KB103`, `KB104`, `KB111`, `KB112`;
 - parsing: `KB200`, `KB201`, `KB202`, `KB203`;
-- dependency consistency: `KB300`, `KB301`, `KB305`, `KB306`, `KB307`, `KB308`;
+- dependency consistency: `KB300`, `KB301`, `KB306`, `KB307`;
 - workspaces: `KB400`, `KB401`, `KB402`;
 - hints: `KB500`, `KB501`, `KB502`, `KB503`, `KB504`, `KB505`;
 - version conflicts: `KB700`;
@@ -385,7 +389,7 @@ or executing fixture code. It must never follow a mutable default branch.
 
 ## 11. Deferred capabilities
 
-The following are intentionally outside schema v2:
+The following are intentionally outside schema v3:
 
 - PHP and Laravel application detection.
 - Runtime/build command selection, application recommendation, deployability,

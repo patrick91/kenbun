@@ -12,8 +12,9 @@ mod workspace;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyKeyError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::PyDict;
 
 use crate::model::{FileEntry, ScanResult};
 
@@ -54,9 +55,45 @@ fn analyze(
 ) -> PyResult<ScanResult> {
     let entries = files
         .try_iter()?
-        .map(|entry| {
+        .enumerate()
+        .map(|(index, entry)| {
             let entry = entry?;
-            Ok(entry.extract::<PyRef<'_, FileEntry>>()?.clone())
+            let entry = entry
+                .cast::<PyDict>()
+                .map_err(|_| PyTypeError::new_err(format!("files[{index}] must be a dict")))?;
+            let path = entry
+                .get_item("path")?
+                .ok_or_else(|| {
+                    PyKeyError::new_err(format!("files[{index}] is missing required key 'path'"))
+                })?
+                .extract::<String>()
+                .map_err(|_| {
+                    PyTypeError::new_err(format!("files[{index}]['path'] must be a string"))
+                })?;
+            let size = entry
+                .get_item("size")?
+                .ok_or_else(|| {
+                    PyKeyError::new_err(format!("files[{index}] is missing required key 'size'"))
+                })?
+                .extract::<u64>()
+                .map_err(|_| {
+                    PyTypeError::new_err(format!(
+                        "files[{index}]['size'] must be a non-negative integer"
+                    ))
+                })?;
+            let blob_sha = match entry.get_item("blob_sha")? {
+                Some(value) => value.extract::<Option<String>>().map_err(|_| {
+                    PyTypeError::new_err(format!(
+                        "files[{index}]['blob_sha'] must be a string or None"
+                    ))
+                })?,
+                None => None,
+            };
+            Ok(FileEntry {
+                path,
+                size,
+                blob_sha,
+            })
         })
         .collect::<PyResult<Vec<_>>>()?;
     let mut extracted_contents = BTreeMap::new();
@@ -82,7 +119,6 @@ fn analyze(
 fn kenbun(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(scan_py, m)?)?;
     m.add_function(wrap_pyfunction!(analyze, m)?)?;
-    m.add_class::<model::FileEntry>()?;
     m.add_class::<model::WantFile>()?;
     m.add_class::<model::ScanResult>()?;
     m.add_class::<model::Workspace>()?;
@@ -93,9 +129,7 @@ fn kenbun(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<model::EnvVar>()?;
     m.add_class::<model::DependencySet>()?;
     m.add_class::<model::DeclaredDep>()?;
-    m.add_class::<model::ResolvedDep>()?;
     m.add_class::<model::ManifestRef>()?;
-    m.add_class::<model::LockfileRef>()?;
     m.add_class::<model::SourceRef>()?;
     m.add_class::<model::PythonInfo>()?;
     m.add_class::<model::NodeInfo>()?;

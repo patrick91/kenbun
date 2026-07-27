@@ -122,13 +122,6 @@ fn scan_fileset(
             .iter()
             .map(|error| diag::kb203(&error.path, &error.message)),
     );
-    scan_diags.extend(
-        node_discovery
-            .packages
-            .iter()
-            .filter(|package| package.package_manager_candidates.len() > 1)
-            .map(|package| diag::kb308(&package.path, &package.package_manager_candidates)),
-    );
 
     // ── workspace at the effective root ────────────────────────────────
     let root_pyproject = fs.read_str("pyproject.toml");
@@ -154,9 +147,6 @@ fn scan_fileset(
     {
         for pattern in &node_workspace.unmatched_patterns {
             scan_diags.push(diag::kb402(".", pattern));
-        }
-        if node_workspace.package_manager_candidates.len() > 1 {
-            scan_diags.push(diag::kb308(".", &node_workspace.package_manager_candidates));
         }
         let mut node_members = node_workspace.members.clone();
         if let Some(workspace) = &mut ws_info {
@@ -235,7 +225,6 @@ fn scan_fileset(
     }
 
     // ── per-project analysis ───────────────────────────────────────────
-    let workspace_lock = fs.contains("uv.lock");
     let mut projects: Vec<Project> = Vec::new();
     for dir in &project_dirs {
         let hint_entry = if hint_dir.as_deref() == Some(dir.as_str())
@@ -245,7 +234,7 @@ fn scan_fileset(
         } else {
             None
         };
-        projects.push(analyze_project(fs, dir, workspace_lock, hint_entry));
+        projects.push(analyze_project(fs, dir, hint_entry));
     }
 
     let mut applications = python_applications(&projects);
@@ -519,13 +508,6 @@ fn merge_node_applications(applications: &mut Vec<Application>, discovery: &RawN
                 },
             });
         }
-        if package.package_manager_candidates.len() > 1 {
-            application.diagnostics.push(diag::kb308(
-                &package.path,
-                &package.package_manager_candidates,
-            ));
-        }
-
         application
             .technologies
             .sort_by(|a, b| (&a.role, &a.kind, &a.name).cmp(&(&b.role, &b.kind, &b.name)));
@@ -647,27 +629,7 @@ fn node_dependency_set(package: &RawNodePackage) -> DependencySet {
             path: package.manifest_path.clone(),
             kind: "package-json".to_string(),
         }],
-        lockfiles: package
-            .lockfiles
-            .iter()
-            .map(|path| LockfileRef {
-                path: path.clone(),
-                kind: node_lockfile_kind(path).to_string(),
-                parsed: false,
-            })
-            .collect(),
         declared,
-        resolved: Vec::new(),
-    }
-}
-
-fn node_lockfile_kind(path: &str) -> &'static str {
-    match path.rsplit('/').next().unwrap_or(path) {
-        "package-lock.json" | "npm-shrinkwrap.json" => "npm",
-        "pnpm-lock.yaml" => "pnpm",
-        "yarn.lock" => "yarn",
-        "bun.lock" | "bun.lockb" => "bun",
-        _ => "node",
     }
 }
 
@@ -698,12 +660,7 @@ fn safe_argv(command: &str) -> Option<Vec<String>> {
 
 // ── per-project ────────────────────────────────────────────────────────────
 
-fn analyze_project(
-    fs: &FileSet,
-    dir: &str,
-    workspace_lock: bool,
-    entrypoint_hint: Option<&str>,
-) -> Project {
+fn analyze_project(fs: &FileSet, dir: &str, entrypoint_hint: Option<&str>) -> Project {
     let display_path = if dir.is_empty() {
         ".".to_string()
     } else {
@@ -764,19 +721,7 @@ fn analyze_project(
     }
     declared.sort_by(|a, b| (&a.name, &a.source.path).cmp(&(&b.name, &b.source.path)));
 
-    // Resolved Python dependencies from supported lockfiles.
-    let mut resolved: Vec<ResolvedDep> = Vec::new();
-    for lock in &files.lockfiles {
-        if lock.parsed {
-            if let Some(source) = fs.read_str(&lock.path) {
-                resolved.extend(manifest::parse_lock_resolved(
-                    &source, &lock.path, &lock.kind,
-                ));
-            }
-        }
-    }
-
-    // KB300 / KB305 / package manager + KB306
+    // KB300 / package manager + KB306
     let has_project_deps = parsed
         .as_ref()
         .and_then(|pp| pp.project.as_ref())
@@ -788,10 +733,6 @@ fn analyze_project(
         .any(|r| r.rsplit('/').next() == Some("requirements.txt"));
     if has_project_deps && has_root_requirements {
         diagnostics.push(diag::kb300(&display_path));
-    }
-    if files.lockfiles.len() > 1 {
-        let names: Vec<String> = files.lockfiles.iter().map(|l| l.path.clone()).collect();
-        diagnostics.push(diag::kb305(&display_path, &names));
     }
     let has_poetry_table = parsed
         .as_ref()
@@ -874,15 +815,8 @@ fn analyze_project(
     }
 
     // Evident-install-path rule: which FastAPI declarations install?
-    let has_lock = workspace_lock || files.lockfiles.iter().any(|l| l.kind == "uv");
     let installable = |group: &str| -> bool {
-        if has_lock {
-            group == "project" || group == "dev" || group == "group:dev"
-        } else {
-            // pyproject path installs only [project.dependencies]; the
-            // requirements path records its non-dev files as "project"
-            group == "project"
-        }
+        group == "project" || (package_manager == "uv" && matches!(group, "dev" | "group:dev"))
     };
     let fastapi_declared = !fastapi_groups.is_empty();
     let fastapi_installable = fastapi_groups.iter().any(|g| installable(g));
@@ -1068,9 +1002,7 @@ fn analyze_project(
             ecosystem: "python".to_string(),
             package_manager: (package_manager != "unknown").then(|| package_manager.to_string()),
             manifests: files.manifests,
-            lockfiles: files.lockfiles,
             declared,
-            resolved,
         }),
         env_vars: Vec::new(),
         python: PythonInfo {
@@ -1113,14 +1045,11 @@ fn detect_package_manager(
     has_pdm_table: bool,
     build_backend: &str,
 ) -> &'static str {
-    let has_kind = |k: &str| files.lockfiles.iter().any(|l| l.kind == k);
-    if has_kind("uv") {
-        "uv"
-    } else if has_kind("poetry") || has_poetry_table || build_backend.starts_with("poetry") {
+    if has_poetry_table || build_backend.starts_with("poetry") {
         "poetry"
-    } else if has_kind("pdm") || has_pdm_table || build_backend.starts_with("pdm") {
+    } else if has_pdm_table || build_backend.starts_with("pdm") {
         "pdm"
-    } else if has_kind("pipenv") || files.manifests.iter().any(|m| m.kind == "pipfile") {
+    } else if files.manifests.iter().any(|m| m.kind == "pipfile") {
         "pipenv"
     } else if files.pyproject.is_some()
         || files
