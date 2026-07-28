@@ -139,29 +139,6 @@ pub struct NodeInfo {
     pub version_pins: Vec<VersionPin>,
 }
 
-#[derive(Clone, Debug)]
-pub(crate) struct DeployTarget {
-    pub framework: String,
-    pub entrypoint: Option<Entrypoint>,
-    pub confidence: String,
-    pub evidence: Vec<Evidence>,
-    pub diagnostics: Vec<Diagnostic>,
-}
-
-#[derive(Clone, Debug)]
-pub(crate) struct Project {
-    pub path: String,
-    pub name: Option<String>,
-    pub is_python_project: bool,
-    pub frameworks: Vec<String>,
-    pub deploy_targets: Vec<DeployTarget>,
-    pub dependencies: Option<DependencySet>,
-    pub env_vars: Vec<EnvVar>,
-    pub python: PythonInfo,
-    pub evidence: Vec<Evidence>,
-    pub diagnostics: Vec<Diagnostic>,
-}
-
 #[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
 pub struct Application {

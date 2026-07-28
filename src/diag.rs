@@ -6,6 +6,37 @@ pub const ERROR: &str = "error";
 pub const WARNING: &str = "warning";
 pub const INFO: &str = "info";
 
+/// Deduplicate exact diagnostics while preserving distinct actionable
+/// messages that share a code and location.
+pub fn sort_and_dedup(diagnostics: &mut Vec<Diagnostic>) {
+    diagnostics.sort_by(|a, b| {
+        let key = |diagnostic: &Diagnostic| {
+            (
+                diagnostic.path.clone().unwrap_or_default(),
+                diagnostic
+                    .span
+                    .as_ref()
+                    .map(|span| (span.start_line, span.start_col))
+                    .unwrap_or((0, 0)),
+                diagnostic.code.clone(),
+                diagnostic.message.clone(),
+            )
+        };
+        key(a).cmp(&key(b))
+    });
+    diagnostics.dedup_by(|a, b| {
+        a.code == b.code
+            && a.message == b.message
+            && a.path == b.path
+            && a.span
+                .as_ref()
+                .map(|span| (span.start_line, span.start_col))
+                == b.span
+                    .as_ref()
+                    .map(|span| (span.start_line, span.start_col))
+    });
+}
+
 pub fn new(
     code: &str,
     severity: &str,

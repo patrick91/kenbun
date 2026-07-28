@@ -1,10 +1,11 @@
+mod assembly;
+mod boundary;
 mod diag;
-mod entrypoint;
 mod fileset;
-mod manifest;
 mod model;
 mod node;
 mod norm;
+mod python;
 mod runtime;
 mod scan;
 mod workspace;

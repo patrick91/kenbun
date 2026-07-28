@@ -114,7 +114,8 @@ kept separate and must independently qualify as an application.
   optional safely parsed argv, optional package-manager facts, and source.
 
 See the [v3 specification](docs/spec.md) for the normative model and detection
-rules.
+rules. See [Architecture](docs/architecture.md) for the internal detector and
+assembly boundaries.
 
 ## External fixture corpus
 
