@@ -545,6 +545,8 @@ def test_to_json_shape(tmp_path: Path) -> None:
     assert data["applications"][0]["node"] is None
     assert "lockfiles" not in data["applications"][0]["dependencies"][0]
     assert "resolved" not in data["applications"][0]["dependencies"][0]
+    assert data["applications"][0]["dependencies"][0]["package_manager"] == "uv"
+    assert data["applications"][0]["dependencies"][0]["package_manager_version"] is None
     assert [item["name"] for item in data["applications"][0]["technologies"]] == [
         "fastapi",
         "python",
@@ -847,6 +849,25 @@ def test_lfs_pointer_manifest_is_not_parsed_as_its_content(tmp_path: Path) -> No
     assert "KB201" not in codes(result)
     assert "KB801" in codes(result)
     assert result.completeness == "partial"
+
+
+def test_lfs_pointer_ignore_file_makes_the_local_scan_partial(tmp_path: Path) -> None:
+    make(
+        tmp_path,
+        {
+            ".gitignore": LFS_POINTER,
+            "pyproject.toml": FASTAPI_PYPROJECT,
+            "main.py": APP_MAIN,
+        },
+    )
+
+    result = kenbun.scan(tmp_path)
+
+    assert result.completeness == "partial"
+    assert any(
+        diagnostic.code == "KB801" and diagnostic.path == ".gitignore"
+        for diagnostic in result.diagnostics
+    )
 
 
 def test_unreadable_local_file_makes_the_scan_partial(tmp_path: Path) -> None:

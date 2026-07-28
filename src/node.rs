@@ -11,6 +11,14 @@ use serde_json::{Map, Value};
 use crate::fileset::FileSet;
 use crate::runtime::{self, RuntimePin};
 
+const LOCKFILE_NAMES: &[(&str, &str)] = &[
+    ("package-lock.json", "npm"),
+    ("npm-shrinkwrap.json", "npm"),
+    ("pnpm-lock.yaml", "pnpm"),
+    ("yarn.lock", "yarn"),
+    ("bun.lock", "bun"),
+    ("bun.lockb", "bun"),
+];
 const CONFIG_EXTENSIONS: &[&str] = &["js", "mjs", "cjs", "ts", "mts", "cts"];
 const CONFIG_PREFIXES: &[&str] = &[
     "astro",
@@ -41,11 +49,12 @@ pub(crate) struct RawNodePackage {
     pub dev_dependencies: BTreeMap<String, String>,
     pub optional_dependencies: BTreeMap<String, String>,
     pub scripts: BTreeMap<String, String>,
-    /// The unmodified packageManager value, if it was a string.
-    pub explicit_package_manager: Option<String>,
     pub requires_node: Option<String>,
     pub version_pins: Vec<RuntimePin>,
     pub package_manager: Option<RawPackageManager>,
+    /// Candidates at the nearest lock/workspace evidence level. More than one
+    /// means the evidence was ambiguous and `package_manager` is None.
+    pub package_manager_candidates: Vec<String>,
     pub declares_workspace: bool,
     pub workspace_patterns: Vec<String>,
     /// Same-directory framework/build/language config paths.
@@ -74,6 +83,7 @@ pub(crate) struct RawNodeWorkspace {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct RawPackageManager {
     pub name: String,
+    pub version: Option<String>,
     pub source: String,
     pub explicit: bool,
 }
@@ -221,7 +231,8 @@ pub(crate) fn discover(fs: &FileSet) -> RawNodeDiscovery {
         let config_files = same_root_config_files(fs, dir);
         let index_html_path = join(dir, "index.html");
         let index_html = fs.contains(&index_html_path).then_some(index_html_path);
-        let package_manager = infer_package_manager(fs, dir, &manifests);
+        let (package_manager, package_manager_candidates) =
+            infer_package_manager(fs, dir, &manifests);
         let version_pins = runtime::node_version_pins(fs, dir);
         let language = classify_language(
             fs,
@@ -250,10 +261,10 @@ pub(crate) fn discover(fs: &FileSet) -> RawNodeDiscovery {
             dev_dependencies: manifest.dev_dependencies.clone(),
             optional_dependencies: manifest.optional_dependencies.clone(),
             scripts: manifest.scripts.clone(),
-            explicit_package_manager: manifest.package_manager.clone(),
             requires_node: manifest.requires_node.clone(),
             version_pins,
             package_manager,
+            package_manager_candidates,
             declares_workspace: manifest.declares_workspace,
             workspace_patterns: manifest.workspace_patterns.clone(),
             config_files,
@@ -279,7 +290,7 @@ pub(crate) fn discover(fs: &FileSet) -> RawNodeDiscovery {
                 .into_iter()
                 .map(|message| raw_error(&error_path, message)),
         );
-        let package_manager = infer_package_manager(fs, &dir, &manifests);
+        let (package_manager, _) = infer_package_manager(fs, &dir, &manifests);
         workspaces.push(RawNodeWorkspace {
             path: display_dir(&dir),
             sources,
@@ -753,7 +764,7 @@ fn infer_package_manager(
     fs: &FileSet,
     dir: &str,
     manifests: &BTreeMap<String, PackageManifest>,
-) -> Option<RawPackageManager> {
+) -> (Option<RawPackageManager>, Vec<String>) {
     let ancestors = ancestors_inclusive(dir);
 
     for ancestor in &ancestors {
@@ -763,37 +774,82 @@ fn infer_package_manager(
         else {
             continue;
         };
-        if let Some(manager) = known_manager_from_package_manager(raw) {
+        if let Some((manager, version)) = parse_package_manager(raw) {
             let source = join(ancestor, "package.json");
-            return Some(RawPackageManager {
-                name: manager.to_string(),
-                source,
-                explicit: true,
-            });
+            return (
+                Some(RawPackageManager {
+                    name: manager.to_string(),
+                    version,
+                    source,
+                    explicit: true,
+                }),
+                vec![manager.to_string()],
+            );
         }
     }
 
     for ancestor in ancestors {
-        let source = join(&ancestor, "pnpm-workspace.yaml");
-        if fs.contains(&source) {
-            return Some(RawPackageManager {
-                name: "pnpm".to_string(),
-                source,
-                explicit: false,
-            });
+        let evidence = manager_evidence_at(fs, &ancestor);
+        if evidence.is_empty() {
+            continue;
         }
+        let candidates: Vec<String> = evidence.keys().cloned().collect();
+        if candidates.len() == 1 {
+            let name = candidates[0].clone();
+            let source = evidence[&name]
+                .first()
+                .cloned()
+                .unwrap_or_else(|| display_dir(&ancestor));
+            return (
+                Some(RawPackageManager {
+                    name,
+                    version: None,
+                    source,
+                    explicit: false,
+                }),
+                candidates,
+            );
+        }
+        return (None, candidates);
     }
 
-    None
+    (None, Vec::new())
 }
 
-fn known_manager_from_package_manager(raw: &str) -> Option<&'static str> {
-    let name = raw.trim().split('@').next()?.to_ascii_lowercase();
+fn manager_evidence_at(fs: &FileSet, dir: &str) -> BTreeMap<String, Vec<String>> {
+    let mut evidence: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for (file, manager) in LOCKFILE_NAMES {
+        let path = join(dir, file);
+        if fs.contains(&path) {
+            evidence
+                .entry((*manager).to_string())
+                .or_default()
+                .push(path);
+        }
+    }
+    let pnpm_workspace = join(dir, "pnpm-workspace.yaml");
+    if fs.contains(&pnpm_workspace) {
+        evidence
+            .entry("pnpm".to_string())
+            .or_default()
+            .push(pnpm_workspace);
+    }
+    for values in evidence.values_mut() {
+        values.sort();
+    }
+    evidence
+}
+
+fn parse_package_manager(raw: &str) -> Option<(&'static str, Option<String>)> {
+    let raw = raw.trim();
+    let (name, version) = raw.split_once('@').unwrap_or((raw, ""));
+    let name = name.to_ascii_lowercase();
+    let version = (!version.is_empty()).then(|| version.to_string());
     match name.as_str() {
-        "npm" => Some("npm"),
-        "pnpm" => Some("pnpm"),
-        "yarn" => Some("yarn"),
-        "bun" => Some("bun"),
+        "npm" => Some(("npm", version)),
+        "pnpm" => Some(("pnpm", version)),
+        "yarn" => Some(("yarn", version)),
+        "bun" => Some(("bun", version)),
         _ => None,
     }
 }

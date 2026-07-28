@@ -501,12 +501,22 @@ fn merge_node_applications(applications: &mut Vec<Application>, discovery: &RawN
                     .package_manager
                     .as_ref()
                     .map(|manager| manager.name.clone()),
+                package_manager_version: package
+                    .package_manager
+                    .as_ref()
+                    .and_then(|manager| manager.version.clone()),
                 argv: safe_argv(command),
                 source: SourceRef {
                     path: package.manifest_path.clone(),
                     span: None,
                 },
             });
+        }
+        if package.package_manager_candidates.len() > 1 {
+            application.diagnostics.push(diag::kb308(
+                &package.path,
+                &package.package_manager_candidates,
+            ));
         }
         application
             .technologies
@@ -625,6 +635,10 @@ fn node_dependency_set(package: &RawNodePackage) -> DependencySet {
             .package_manager
             .as_ref()
             .map(|manager| manager.name.clone()),
+        package_manager_version: package
+            .package_manager
+            .as_ref()
+            .and_then(|manager| manager.version.clone()),
         manifests: vec![ManifestRef {
             path: package.manifest_path.clone(),
             kind: "package-json".to_string(),
@@ -677,7 +691,10 @@ fn analyze_project(fs: &FileSet, dir: &str, entrypoint_hint: Option<&str>) -> Pr
             Some(Err(err)) => diagnostics.push(diag::kb201(pp_path, &err)),
             None if !fs.is_pending(pp_path) => diagnostics.push(diag::kb801(
                 pp_path,
-                "pyproject.toml is unreadable, non-UTF-8, or exceeds the 2 MiB parse cap",
+                &format!(
+                    "pyproject.toml is unreadable, non-UTF-8, or exceeds the {}-byte parse cap",
+                    fs.max_file_bytes()
+                ),
             )),
             None => {}
         }
@@ -1001,6 +1018,7 @@ fn analyze_project(fs: &FileSet, dir: &str, entrypoint_hint: Option<&str>) -> Pr
         dependencies: Some(DependencySet {
             ecosystem: "python".to_string(),
             package_manager: (package_manager != "unknown").then(|| package_manager.to_string()),
+            package_manager_version: None,
             manifests: files.manifests,
             declared,
         }),

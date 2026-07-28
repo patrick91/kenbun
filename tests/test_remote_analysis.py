@@ -159,6 +159,27 @@ def test_lfs_pointer_content_is_treated_as_unavailable() -> None:
     assert analysis.result.completeness == "partial"
 
 
+def test_lfs_pointer_ignore_file_cannot_produce_a_complete_result() -> None:
+    analysis = kenbun.remote_analysis(
+        [
+            entry(".gitignore", size=len(LFS_POINTER)),
+            entry("ignored/pyproject.toml"),
+        ],
+    )
+
+    analysis.update({".gitignore": LFS_POINTER})
+    analysis.update({"ignored/pyproject.toml": FASTAPI_MANIFEST})
+
+    assert analysis.result.completeness == "partial"
+    assert [
+        application.application_dir for application in analysis.result.applications
+    ] == ["ignored"]
+    assert any(
+        diagnostic.code == "KB801" and diagnostic.path == ".gitignore"
+        for diagnostic in analysis.result.diagnostics
+    )
+
+
 def test_real_content_still_completes() -> None:
     analysis = kenbun.remote_analysis(
         [entry("pyproject.toml", size=len(FASTAPI_MANIFEST))],

@@ -21,7 +21,6 @@ import kenbun
 result = kenbun.scan(
     Path("."),
     application_dir=None,  # optional repository-relative hint
-    entrypoint=None,       # optional FastAPI "module:attribute" hint
 )
 
 for application in result.applications:
@@ -106,11 +105,13 @@ kept separate and must independently qualify as an application.
 - `Application` contains `technologies`, optional entrypoint, one or more
   ecosystem-specific `DependencySet` values, explicit `build_scripts`, Python
   and Node runtime metadata, evidence, and local diagnostics.
+- `DependencySet` and `BuildScript` report an inferred package-manager name
+  and, when `package.json#packageManager` supplies one, its declared version.
 - `Technology` has a normalized name, kind (`language`, `framework`,
   `ui-framework`, `integration`, or `build-tool`), role (`primary` or
   `supporting`), confidence, and evidence.
 - `BuildScript` records the explicit `build` script as data: the raw command,
-  optional safely parsed argv, optional inferred package manager, and source.
+  optional safely parsed argv, optional package-manager facts, and source.
 
 See the [v3 specification](docs/spec.md) for the normative model and detection
 rules.

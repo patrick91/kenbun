@@ -65,6 +65,7 @@ class ManifestRef:
 class DependencySet:
     ecosystem: Literal["python", "node"]
     package_manager: str | None
+    package_manager_version: str | None
     manifests: list[ManifestRef]
     declared: list[DeclaredDep]
 
@@ -79,6 +80,7 @@ class BuildScript:
     name: str
     command: str
     package_manager: str | None
+    package_manager_version: str | None
     argv: list[str] | None
     source: SourceRef
 

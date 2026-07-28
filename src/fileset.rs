@@ -17,6 +17,10 @@ const MAX_SCRIPT_REQUESTS_PER_ROUND: usize = 16;
 /// First line of a Git LFS pointer, per the LFS v1 spec.
 const LFS_POINTER_PREFIX: &[u8] = b"version https://git-lfs.github.com/spec/v1";
 
+fn is_lfs_pointer(bytes: &[u8]) -> bool {
+    bytes.starts_with(LFS_POINTER_PREFIX)
+}
+
 pub fn read_bounded_path(path: &Path) -> Option<String> {
     String::from_utf8(read_bounded_bytes(path)?).ok()
 }
@@ -115,6 +119,13 @@ impl FileSet {
         matches!(&self.source, FileSource::Virtual(_))
     }
 
+    pub fn max_file_bytes(&self) -> u64 {
+        match &self.source {
+            FileSource::Local => MAX_FILE_BYTES,
+            FileSource::Virtual(source) => source.max_file_bytes,
+        }
+    }
+
     /// Files directly or transitively under a directory (`""` = root).
     pub fn under<'a>(&'a self, dir: &'a str) -> impl Iterator<Item = &'a str> + 'a {
         let prefix = if dir.is_empty() {
@@ -151,7 +162,7 @@ impl FileSet {
         // A pointer describes content that was never fetched. Its size is the
         // pointer's, so it slips past every cap; parsing it as the real file
         // invents facts about the repository.
-        if bytes.starts_with(LFS_POINTER_PREFIX) {
+        if is_lfs_pointer(&bytes) {
             self.mark_unavailable();
             return None;
         }
@@ -463,6 +474,13 @@ pub fn virtual_files(
             Some(Some(bytes)) if bytes.len() as u64 > max_file_bytes => {
                 unavailable_seen = true;
             }
+            Some(Some(bytes)) if is_lfs_pointer(bytes) => {
+                unavailable_seen = true;
+                issues.push(FileIssue {
+                    path: path.clone(),
+                    message: "Git LFS pointer does not contain the file content".to_string(),
+                });
+            }
             Some(Some(bytes)) => match std::str::from_utf8(bytes) {
                 Ok(source) => {
                     let dir = path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
@@ -599,6 +617,7 @@ pub fn walk_fs(
     let mut files = BTreeMap::new();
     let mut truncated = false;
     let mut issues = Vec::new();
+    let mut unavailable_seen = false;
 
     if !root.is_dir() {
         issues.push(FileIssue {
@@ -701,6 +720,15 @@ pub fn walk_fs(
                 continue;
             }
         };
+        if rel_str.rsplit('/').next() == Some(".gitignore")
+            && read_bounded_bytes(entry.path()).is_some_and(|bytes| is_lfs_pointer(&bytes))
+        {
+            unavailable_seen = true;
+            issues.push(FileIssue {
+                path: rel_str.clone(),
+                message: "Git LFS pointer does not contain the file content".to_string(),
+            });
+        }
         files.insert(rel_str, size);
     }
 
@@ -709,7 +737,7 @@ pub fn walk_fs(
         files,
         truncated,
         issues,
-        unavailable: AtomicBool::new(false),
+        unavailable: AtomicBool::new(unavailable_seen),
         source: FileSource::Local,
     }
 }

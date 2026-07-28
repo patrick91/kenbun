@@ -66,6 +66,10 @@ def test_analyze_skips_known_oversized_files() -> None:
     assert result.status == "complete"
     assert result.completeness == "partial"
     assert result.file_requests == []
+    assert any(
+        diagnostic.code == "KB801" and "4-byte parse cap" in diagnostic.message
+        for diagnostic in result.diagnostics
+    )
 
 
 def test_analyze_applies_file_count_limit() -> None:
@@ -155,6 +159,26 @@ def test_lockfiles_are_not_requested() -> None:
     assert result.status == "complete"
     assert result.completeness == "complete"
     assert result.file_requests == []
+
+
+def test_lockfile_inventory_infers_manager_without_requesting_contents() -> None:
+    files = [entry("package.json"), entry("package-lock.json")]
+    package = b"""{
+      "dependencies": {"next": "16.0.0", "react": "19.0.0"},
+      "scripts": {"build": "next build"}
+    }"""
+
+    first = kenbun.analyze(files)
+    assert [request.path for request in first.file_requests] == ["package.json"]
+
+    result = kenbun.analyze(files, {"package.json": package})
+
+    assert result.status == "complete"
+    assert result.completeness == "complete"
+    assert result.file_requests == []
+    assert result.applications[0].dependencies[0].package_manager == "npm"
+    assert result.applications[0].dependencies[0].package_manager_version is None
+    assert result.applications[0].build_scripts[0].package_manager == "npm"
 
 
 def test_unavailable_content_terminates_with_partial_result() -> None:

@@ -66,6 +66,12 @@ def test_manifest_requires_full_commit_sha(tmp_path: Path) -> None:
         runner.load_manifest(manifest)
 
 
+def test_projection_defaults_to_current_schema() -> None:
+    runner = load_runner()
+
+    assert runner.expected_projection({})["schema_version"] == 3
+
+
 def test_safe_extract_rejects_links(tmp_path: Path) -> None:
     runner = load_runner()
     archive = tmp_path / "fixture.tar.gz"

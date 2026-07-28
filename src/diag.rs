@@ -186,6 +186,19 @@ pub fn kb307(path: &str, framework: &str) -> Diagnostic {
     )
 }
 
+pub fn kb308(path: &str, candidates: &[String]) -> Diagnostic {
+    new(
+        "KB308",
+        WARNING,
+        format!(
+            "Node package manager is ambiguous: {}",
+            candidates.join(", ")
+        ),
+        Some(path.to_string()),
+        None,
+    )
+}
+
 pub fn kb400(root: &str, matched: &str) -> Diagnostic {
     new(
         "KB400",

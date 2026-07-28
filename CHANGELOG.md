@@ -60,27 +60,10 @@ directory hint from `target_dir` to `application_dir`.
   manifest-first, so repositories without supported dependency evidence avoid
   speculative source reads.
 - Stop reading lockfiles and remove resolved dependency and lockfile facts.
-  Schema v3 focuses dependency analysis on declarative manifests.
-- Replace the Python-project/deploy-target/classification response with the
-  schema-v1 `ScanResult.applications` model. Applications expose normalized
-  technologies, ecosystem-specific dependency sets, explicit build-script
-  facts, entrypoints, evidence, and diagnostics.
-- Rename the `scan()` directory hint from `target_dir` to `application_dir`.
-  Command selection, recommendations, and deployability policy belong to
-  consumers.
-- Add application detection for Django and Flask identity, Next.js, Astro,
-  Nuxt, SvelteKit, TanStack Start, React Router Framework Mode, SolidStart,
-  legacy Remix, and strict standalone Vite applications while preserving the
-  detailed FastAPI resolver.
-- Add same-root supporting technology detection for JavaScript/TypeScript,
-  React, Vue, Svelte, Solid, Vite, and normalized `cross-inertia` integration.
-  Nested package evidence remains isolated unless the nested directory
-  independently qualifies as an application.
-- Add uv, npm, pnpm, Yarn, Bun, and mixed-workspace discovery, including
-  upward discovery from directories inside members, explicit Node build-script
-  facts, and conservative package-manager inference with no implicit npm default.
-- Add a manual external-fixture runner backed by full, immutable GitHub commit
-  SHAs. The regular test suite remains network-independent.
+  Schema v3 focuses dependency analysis on declarative manifests while using
+  lockfile paths as package-manager evidence without fetching their contents.
+- Report the declared version from `package.json#packageManager`, and diagnose
+  ambiguous lockfile-based package-manager evidence instead of guessing.
 
 ## 0.2.3 - 2026-07-09
 

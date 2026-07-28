@@ -178,6 +178,7 @@ Technology
 DependencySet
 ├─ ecosystem: "python" | "node"
 ├─ package_manager: str | None
+├─ package_manager_version: str | None
 ├─ manifests: list[ManifestRef]
 └─ declared: list[DeclaredDep]
 
@@ -185,6 +186,7 @@ BuildScript
 ├─ name: str                              # v3 emits only "build"
 ├─ command: str                           # exact package.json script value
 ├─ package_manager: str | None
+├─ package_manager_version: str | None
 ├─ argv: list[str] | None                 # only when safely representable
 └─ source: SourceRef
 
@@ -206,7 +208,7 @@ pins come from the nearest `.python-version` and relevant `.tool-versions`
 entry. Node pins come from the nearest `.node-version`, `.nvmrc`, and relevant
 `.tool-versions` entry; `package.json#engines.node` is retained as the Node
 runtime constraint. `entrypoint` is optional because
-only FastAPI has detailed entrypoint resolution in v1 and because a framework
+only FastAPI has detailed entrypoint resolution in v3 and because a framework
 can be detected even when its entrypoint is unresolved.
 
 `Evidence` records a kind, path, optional span, and human-readable detail.
@@ -277,7 +279,7 @@ cap confidence and emit diagnostics. A declared FastAPI dependency with no
 resolved object still produces the application with `entrypoint=None` and
 `KB103`.
 
-Django and Flask do not receive inferred `Entrypoint` values in v1.
+Django and Flask do not receive inferred `Entrypoint` values in v3.
 
 ## 6. Node detection
 
@@ -350,23 +352,31 @@ workspace upward and report all independently qualified member applications.
 when a Node workspace is valid but its manager is ambiguous or unknown, and
 `mixed` when the same root declares both uv and Node workspaces.
 Manager-specific facts remain optional on `DependencySet` and `BuildScript`.
+When an explicit `packageManager` contains a version, Kenbun exposes it as
+`package_manager_version`; path-based inference has no version.
 
 Node package-manager inference uses this precedence:
 
 1. The nearest `package.json` with an explicit `packageManager`, walking from
    the application directory toward the effective root.
-2. Otherwise, a `pnpm-workspace.yaml` manifest identifies pnpm.
+2. Otherwise, the nearest directory with exactly one manager signal:
+   `package-lock.json` or `npm-shrinkwrap.json` for npm, `pnpm-lock.yaml` or
+   `pnpm-workspace.yaml` for pnpm, `yarn.lock` for Yarn, and `bun.lock` or
+   `bun.lockb` for Bun.
 
-Kenbun must not default to npm merely because `package.json` exists.
+Lockfile contents are never requested or parsed; only their inventory paths are
+used as manager evidence. Conflicting signals at the same nearest directory
+leave the manager unknown and emit `KB308`. Kenbun must not default to npm
+merely because `package.json` exists.
 
 ## 8. Build scripts
 
-For a Node dependency set, v1 records only an explicitly declared
+For a Node dependency set, v3 records only an explicitly declared
 `scripts.build`. `BuildScript.command` preserves the raw string. `argv` is set
 only for a simple command that can be represented safely without interpreting
 shell control syntax; commands such as `tsc && vite build` keep their raw form
-and use `argv=None`. `package_manager` follows the inference rules above and
-may be `None`.
+and use `argv=None`. Package-manager name and version follow the inference
+rules above and may be `None`.
 
 The script is a repository fact, not a recommendation. Kenbun never executes
 it and does not choose whether a consumer should run it.
@@ -379,7 +389,7 @@ presentation facts. Application diagnostics are also aggregated onto
 
 - discovery: `KB100`, `KB101`, `KB102`, `KB103`, `KB104`, `KB111`, `KB112`;
 - parsing: `KB200`, `KB201`, `KB202`, `KB203`;
-- dependency consistency: `KB300`, `KB301`, `KB306`, `KB307`;
+- dependency consistency: `KB300`, `KB301`, `KB306`, `KB307`, `KB308`;
 - workspaces: `KB400`, `KB401`, `KB402`;
 - hints: `KB500`, `KB501`, `KB502`, `KB503`, `KB504`, `KB505`;
 - version conflicts: `KB700`;

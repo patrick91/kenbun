@@ -92,6 +92,7 @@ pub struct ManifestRef {
 pub struct DependencySet {
     pub ecosystem: String,
     pub package_manager: Option<String>,
+    pub package_manager_version: Option<String>,
     pub manifests: Vec<ManifestRef>,
     pub declared: Vec<DeclaredDep>,
 }
@@ -112,6 +113,7 @@ pub struct BuildScript {
     pub name: String,
     pub command: String,
     pub package_manager: Option<String>,
+    pub package_manager_version: Option<String>,
     pub argv: Option<Vec<String>>,
     pub source: SourceRef,
 }
