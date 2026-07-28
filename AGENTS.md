@@ -114,4 +114,5 @@ focused unit tests.
 - Do not commit, push, or alter a pull request unless the user explicitly asks
   for that action.
 - Stage files explicitly; never sweep unrelated work into a commit.
-- Update the changelog for user-visible behavior.
+- Do not manually add unreleased entries to `CHANGELOG.md`; AutoPub owns
+  release-note generation and published changelog updates.

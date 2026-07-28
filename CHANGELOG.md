@@ -69,24 +69,6 @@ directory hint from `target_dir` to `application_dir`.
 
 # CHANGELOG
 
-## Unreleased
-
-- Allow callers to select the Python and/or Node ecosystems for local,
-  stateless remote, and stateful remote analysis. Selection also limits
-  workspace discovery and remote file requests.
-- Add `remote_analysis()` for stateful incremental repository analysis, backed
-  by the pure `analyze()` primitive. Remote inventories contain paths and
-  optional repository-reported sizes, allowing Kenbun to skip files above its
-  parse limit before callers fetch them. Ordered `FileRequest` objects ask
-  callers only for relevant, fetchable contents. Remote script probing is
-  manifest-first, so repositories without supported dependency evidence avoid
-  speculative source reads.
-- Stop reading lockfiles and remove resolved dependency and lockfile facts.
-  Schema v3 focuses dependency analysis on declarative manifests while using
-  lockfile paths as package-manager evidence without fetching their contents.
-- Report the declared version from `package.json#packageManager`, and diagnose
-  ambiguous lockfile-based package-manager evidence instead of guessing.
-
 ## 0.2.3 - 2026-07-09
 
 Verifies the GitHub release object is created automatically now that the
