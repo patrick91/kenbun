@@ -40,10 +40,15 @@ For remote repositories, pass the repository-relative paths and feed requested
 contents into a stateful analysis:
 
 ```python
+files: list[kenbun.FileEntry] = [
+    kenbun.FileEntry(path="pyproject.toml", size=128),
+    kenbun.FileEntry(path="app.py", size=512),
+]
 analysis = kenbun.remote_analysis(
-    ["pyproject.toml", "app.py"],
+    files,
     inventory_complete=True,
     hints={"script_patterns": ["main.py", "app.py", "api.py"]},
+    max_files=256,
     max_file_bytes=256 * 1024,
 )
 
@@ -54,14 +59,15 @@ while file_requests := analysis.file_requests:
 result = analysis.result
 ```
 
-Each `FileRequest` contains a path, reason, and priority. When transport
-metadata includes a file size, call `analysis.should_fetch(request, size)`
-before fetching it. Unknown sizes are fetchable and Kenbun still validates
-the actual content supplied to `update()`. The caller owns transport-specific
-metadata and returns `bytes` or `None` for every requested path. `scan()` walks
-a real directory; `analyze()` remains the pure, stateless primitive beneath
-`remote_analysis()`. Both analysis modes produce schema v3 `ScanResult` objects
-with deterministic ordering and canonical JSON.
+Each `FileEntry` contains a path and its repository-reported size, or `None`
+when the size is unknown. Kenbun does not request entries known to exceed
+`max_file_bytes` and still validates the actual content supplied to `update()`.
+Each `FileRequest` contains a path, reason, and priority. `max_files` bounds
+requested file contents across every analysis round. The caller owns remaining
+transport-specific metadata and returns `bytes` or `None` for every requested
+path. `scan()` walks a real directory; `analyze()` remains the pure, stateless
+primitive beneath `remote_analysis()`. Both analysis modes produce schema v3
+`ScanResult` objects with deterministic ordering and canonical JSON.
 
 ## Supported detection
 

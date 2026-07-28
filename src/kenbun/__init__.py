@@ -21,7 +21,7 @@ from kenbun._kenbun import (
     scan,
 )
 from kenbun._remote import RemoteAnalysis, remote_analysis
-from kenbun._types import AnalysisHints
+from kenbun._types import AnalysisHints, FileEntry
 
 __all__ = [
     "AnalysisHints",
@@ -33,6 +33,7 @@ __all__ = [
     "Entrypoint",
     "EnvVar",
     "Evidence",
+    "FileEntry",
     "FileRequest",
     "ManifestRef",
     "NodeInfo",

@@ -2,7 +2,7 @@ from collections.abc import Iterable, Mapping
 from os import PathLike
 from typing import Literal
 
-from kenbun._types import AnalysisHints
+from kenbun._types import AnalysisHints, FileEntry
 
 class Span:
     start_line: int
@@ -141,10 +141,11 @@ def scan(
     extra_ignore_files: list[str] | None = None,
 ) -> ScanResult: ...
 def analyze(
-    files: Iterable[str],
+    files: Iterable[FileEntry],
     contents: Mapping[str, bytes | None] | None = None,
     *,
     inventory_complete: bool = True,
     hints: AnalysisHints | None = None,
+    max_files: int | None = None,
     max_file_bytes: int = 2 * 1024 * 1024,
 ) -> ScanResult: ...

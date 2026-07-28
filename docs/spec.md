@@ -71,42 +71,49 @@ workspace root upward. `root` remains the caller's original path;
 class AnalysisHints(TypedDict, total=False):
     script_patterns: list[str]
 
+class FileEntry(TypedDict):
+    path: str
+    size: int | None
+
 def remote_analysis(
-    files: Iterable[str],
+    files: Iterable[FileEntry],
     *,
     inventory_complete: bool = True,
     hints: AnalysisHints | None = None,
     max_rounds: int = 20,
+    max_files: int | None = None,
     max_file_bytes: int = 2 * 1024 * 1024,
 ) -> RemoteAnalysis: ...
 
 def analyze(
-    files: Iterable[str],
+    files: Iterable[FileEntry],
     contents: Mapping[str, bytes | None] | None = None,
     *,
     inventory_complete: bool = True,
     hints: AnalysisHints | None = None,
+    max_files: int | None = None,
     max_file_bytes: int = 2 * 1024 * 1024,
 ) -> ScanResult: ...
 ```
 
-`files` contains normalized repository-relative POSIX paths. Transport
-metadata such as blob identifiers and repository-reported sizes belongs to the
-caller. A path omitted from `contents` has not been fetched. `None` means the
-caller cannot provide the content and prevents that path from being requested
-again. `max_file_bytes` configures the per-file parse cap used by both the
-stateless primitive and remote session. Oversized stateless contents are
-treated as unavailable.
+`files` contains normalized repository-relative POSIX paths and optional
+repository-reported sizes. Kenbun treats entries known to exceed
+`max_file_bytes` as unavailable without requesting their contents. Unknown
+sizes remain requestable. Transport metadata such as blob identifiers belongs
+to the caller. A path omitted from `contents` has not been fetched. `None`
+means the caller cannot provide the content and prevents that path from being
+requested again. `max_files` bounds how many missing file contents can be
+requested; entries already present in `contents` consume that budget. Once
+exhausted, later reads are treated as unavailable. `max_file_bytes` configures
+the per-file parse cap used by both the stateless primitive and remote session.
+Oversized stateless contents are treated as unavailable.
 
 `remote_analysis()` creates a stateful analysis over that inventory. Its
 `file_requests` property contains the current ordered `list[FileRequest]`.
-`should_fetch(request, size)` checks a repository-reported size against the
-session's configured limit before transport work begins; an unknown size is
-fetchable. `update()` requires one `bytes | None` response for every request,
-rejects oversized contents using their actual length, accumulates the response,
-and advances the analysis. `result` is available only after completion. The
-session owns file and round limits, progress validation, and the accumulated
-contents.
+`update()` requires one `bytes | None` response for every request, rejects
+oversized contents using their actual length, accumulates the response, and
+advances the analysis. `result` is available only after completion. The session
+owns file and round limits, progress validation, and the accumulated contents.
 
 `analyze()` is pure and stateless. A caller repeats the call with accumulated
 contents until `status="complete"`. Every unresolved path is requested at

@@ -5,4 +5,9 @@ class AnalysisHints(TypedDict, total=False):
     script_patterns: list[str]
 
 
-__all__ = ["AnalysisHints"]
+class FileEntry(TypedDict):
+    path: str
+    size: int | None
+
+
+__all__ = ["AnalysisHints", "FileEntry"]

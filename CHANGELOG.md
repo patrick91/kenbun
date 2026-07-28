@@ -53,11 +53,12 @@ directory hint from `target_dir` to `application_dir`.
 ## Unreleased
 
 - Add `remote_analysis()` for stateful incremental repository analysis, backed
-  by the pure `analyze()` primitive. Remote inventories contain only paths;
-  ordered `FileRequest` objects ask callers for contents without transport
-  metadata leaking into Kenbun. Remote script probing is manifest-first, so
-  repositories without supported dependency evidence avoid speculative source
-  reads.
+  by the pure `analyze()` primitive. Remote inventories contain paths and
+  optional repository-reported sizes, allowing Kenbun to skip files above its
+  parse limit before callers fetch them. Ordered `FileRequest` objects ask
+  callers only for relevant, fetchable contents. Remote script probing is
+  manifest-first, so repositories without supported dependency evidence avoid
+  speculative source reads.
 - Stop reading lockfiles and remove resolved dependency and lockfile facts.
   Schema v3 focuses dependency analysis on declarative manifests.
 - Replace the Python-project/deploy-target/classification response with the

@@ -11,9 +11,13 @@ dependencies = ["fastapi"]
 FASTAPI_APP = b"from fastapi import FastAPI\napp = FastAPI()\n"
 
 
+def entry(path: str, *, size: int | None = None) -> kenbun.FileEntry:
+    return kenbun.FileEntry(path=path, size=size)
+
+
 def test_remote_analysis_drives_incremental_analysis() -> None:
     analysis = kenbun.remote_analysis(
-        ["pyproject.toml", "app.py"],
+        [entry("pyproject.toml"), entry("app.py")],
         hints={"script_patterns": ["app.py"]},
     )
 
@@ -34,7 +38,7 @@ def test_remote_analysis_drives_incremental_analysis() -> None:
 
 
 def test_remote_analysis_accepts_unavailable_content() -> None:
-    analysis = kenbun.remote_analysis(["pyproject.toml"])
+    analysis = kenbun.remote_analysis([entry("pyproject.toml")])
 
     analysis.update({"pyproject.toml": None})
 
@@ -43,7 +47,7 @@ def test_remote_analysis_accepts_unavailable_content() -> None:
 
 
 def test_remote_analysis_validates_updates() -> None:
-    analysis = kenbun.remote_analysis(["pyproject.toml"])
+    analysis = kenbun.remote_analysis([entry("pyproject.toml")])
 
     with pytest.raises(ValueError, match="Missing responses"):
         analysis.update({})
@@ -64,40 +68,47 @@ def test_remote_analysis_validates_updates() -> None:
         analysis.update({})
 
 
-def test_remote_analysis_applies_custom_file_limit() -> None:
-    analysis = kenbun.remote_analysis(["pyproject.toml"], max_file_bytes=4)
+def test_remote_analysis_skips_known_oversized_files() -> None:
+    analysis = kenbun.remote_analysis(
+        [entry("pyproject.toml", size=5)],
+        max_file_bytes=4,
+    )
 
-    request = analysis.file_requests[0]
-    assert analysis.should_fetch(request, None)
-    assert analysis.should_fetch(request, 4)
-    assert not analysis.should_fetch(request, 5)
+    assert analysis.file_requests == []
+    assert analysis.result.completeness == "partial"
+
+
+@pytest.mark.parametrize("size", [None, 4])
+def test_remote_analysis_validates_fetchable_size_after_fetch(
+    size: int | None,
+) -> None:
+    analysis = kenbun.remote_analysis(
+        [entry("pyproject.toml", size=size)],
+        max_file_bytes=4,
+    )
+
     with pytest.raises(ValueError, match="4-byte limit"):
         analysis.update({"pyproject.toml": b"12345"})
 
 
-@pytest.mark.parametrize("size", [-1, True, 1.5])
-def test_remote_analysis_should_fetch_requires_valid_size(size: int) -> None:
-    analysis = kenbun.remote_analysis(["pyproject.toml"])
+def test_remote_analysis_applies_file_count_limit_across_rounds() -> None:
+    analysis = kenbun.remote_analysis(
+        [entry("pyproject.toml"), entry("app.py")],
+        hints={"script_patterns": ["app.py"]},
+        max_files=1,
+    )
 
-    with pytest.raises(ValueError, match="non-negative integer or None"):
-        analysis.should_fetch(analysis.file_requests[0], size)
+    assert [request.path for request in analysis.file_requests] == ["pyproject.toml"]
 
+    analysis.update({"pyproject.toml": FASTAPI_MANIFEST})
 
-def test_remote_analysis_should_fetch_requires_pending_request() -> None:
-    first = kenbun.remote_analysis(["pyproject.toml"])
-    stale_request = first.file_requests[0]
-    first.update({"pyproject.toml": FASTAPI_MANIFEST})
-
-    with pytest.raises(ValueError, match="not pending"):
-        first.should_fetch(stale_request, 1)
-
-    second = kenbun.remote_analysis(["app.py"])
-    with pytest.raises(ValueError, match="not pending"):
-        second.should_fetch(stale_request, 1)
+    assert analysis.file_requests == []
+    assert analysis.result.completeness == "partial"
+    assert analysis.result.applications[0].entrypoint is None
 
 
 def test_remote_analysis_enforces_round_limit() -> None:
-    files = [f"packages/{index:02}/pyproject.toml" for index in range(65)]
+    files = [entry(f"packages/{index:02}/pyproject.toml") for index in range(65)]
     analysis = kenbun.remote_analysis(files, max_rounds=1)
 
     with pytest.raises(RuntimeError, match="within 1 rounds"):
@@ -113,6 +124,12 @@ def test_remote_analysis_enforces_round_limit() -> None:
 def test_remote_analysis_requires_positive_round_limit(max_rounds: int) -> None:
     with pytest.raises(ValueError, match="positive integer"):
         kenbun.remote_analysis([], max_rounds=max_rounds)
+
+
+@pytest.mark.parametrize("max_files", [-1, True, 1.5])
+def test_remote_analysis_requires_non_negative_file_limit(max_files: int) -> None:
+    with pytest.raises(ValueError, match="non-negative integer or None"):
+        kenbun.remote_analysis([], max_files=max_files)
 
 
 @pytest.mark.parametrize("max_file_bytes", [0, -1, True, 1.5])

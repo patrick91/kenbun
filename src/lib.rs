@@ -14,6 +14,7 @@ use std::path::PathBuf;
 
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::PyBool;
 
 use crate::model::ScanResult;
 
@@ -49,13 +50,14 @@ fn scan_py(
 /// Analyze a caller-provided repository inventory without filesystem or
 /// network access. Missing contents are returned as ordered file requests.
 #[pyfunction]
-#[pyo3(signature = (files, contents=None, *, inventory_complete=true, hints=None, max_file_bytes=2_097_152))]
+#[pyo3(signature = (files, contents=None, *, inventory_complete=true, hints=None, max_files=None, max_file_bytes=2_097_152))]
 fn analyze(
     py: Python<'_>,
     files: &Bound<'_, PyAny>,
     contents: Option<&Bound<'_, PyAny>>,
     inventory_complete: bool,
     hints: Option<BTreeMap<String, Vec<String>>>,
+    max_files: Option<u64>,
     max_file_bytes: u64,
 ) -> PyResult<ScanResult> {
     if max_file_bytes == 0 {
@@ -63,13 +65,36 @@ fn analyze(
             "max_file_bytes must be a positive integer",
         ));
     }
-    let paths = files
+    let entries = files
         .try_iter()?
         .enumerate()
         .map(|(index, entry)| {
-            entry?
-                .extract::<String>()
-                .map_err(|_| PyTypeError::new_err(format!("files[{index}] must be a string")))
+            let entry = entry?;
+            let path = entry
+                .get_item("path")
+                .and_then(|path| path.extract::<String>())
+                .map_err(|_| {
+                    PyTypeError::new_err(format!("files[{index}].path must be a string"))
+                })?;
+            let size = entry.get_item("size").map_err(|_| {
+                PyTypeError::new_err(format!(
+                    "files[{index}].size must be a non-negative integer or None"
+                ))
+            })?;
+            let size = if size.is_none() {
+                0
+            } else if size.is_instance_of::<PyBool>() {
+                return Err(PyTypeError::new_err(format!(
+                    "files[{index}].size must be a non-negative integer or None"
+                )));
+            } else {
+                size.extract::<u64>().map_err(|_| {
+                    PyTypeError::new_err(format!(
+                        "files[{index}].size must be a non-negative integer or None"
+                    ))
+                })?
+            };
+            Ok((path, size))
         })
         .collect::<PyResult<Vec<_>>>()?;
     let mut extracted_contents = BTreeMap::new();
@@ -86,8 +111,14 @@ fn analyze(
             "unknown analysis hint: {key}"
         )));
     }
-    let fs = fileset::virtual_files(paths, extracted_contents, script_patterns, max_file_bytes)
-        .map_err(PyValueError::new_err)?;
+    let fs = fileset::virtual_files(
+        entries,
+        extracted_contents,
+        script_patterns,
+        max_files,
+        max_file_bytes,
+    )
+    .map_err(PyValueError::new_err)?;
     Ok(py.detach(|| scan::analyze(&fs, inventory_complete)))
 }
 

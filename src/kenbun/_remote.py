@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 
 from kenbun._kenbun import FileRequest, ScanResult, analyze
-from kenbun._types import AnalysisHints
+from kenbun._types import AnalysisHints, FileEntry
 
 DEFAULT_MAX_ROUNDS = 20
 DEFAULT_MAX_FILE_BYTES = 2 * 1024 * 1024
@@ -14,11 +14,12 @@ class RemoteAnalysis:
 
     def __init__(
         self,
-        files: Iterable[str],
+        files: Iterable[FileEntry],
         *,
         inventory_complete: bool = True,
         hints: AnalysisHints | None = None,
         max_rounds: int = DEFAULT_MAX_ROUNDS,
+        max_files: int | None = None,
         max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
     ) -> None:
         if (
@@ -27,6 +28,12 @@ class RemoteAnalysis:
             or max_rounds < 1
         ):
             raise ValueError("max_rounds must be a positive integer")
+        if max_files is not None and (
+            not isinstance(max_files, int)
+            or isinstance(max_files, bool)
+            or max_files < 0
+        ):
+            raise ValueError("max_files must be a non-negative integer or None")
         if (
             not isinstance(max_file_bytes, int)
             or isinstance(max_file_bytes, bool)
@@ -39,6 +46,7 @@ class RemoteAnalysis:
         self._inventory_complete = inventory_complete
         self._hints = hints
         self._max_rounds = max_rounds
+        self._max_files = max_files
         self._max_file_bytes = max_file_bytes
         self._current = self._analyze()
         self._validate_current()
@@ -57,15 +65,6 @@ class RemoteAnalysis:
         if self.file_requests:
             raise RuntimeError("Remote analysis is not complete")
         return self._current
-
-    def should_fetch(self, request: FileRequest, size: int | None) -> bool:
-        if not any(pending.path == request.path for pending in self.file_requests):
-            raise ValueError(f"File request for {request.path!r} is not pending")
-        if size is not None and (
-            not isinstance(size, int) or isinstance(size, bool) or size < 0
-        ):
-            raise ValueError("size must be a non-negative integer or None")
-        return size is None or size <= self._max_file_bytes
 
     def update(self, contents: Mapping[str, bytes | None]) -> None:
         if not self.file_requests:
@@ -118,6 +117,7 @@ class RemoteAnalysis:
             self._contents,
             inventory_complete=self._inventory_complete,
             hints=self._hints,
+            max_files=self._max_files,
             max_file_bytes=self._max_file_bytes,
         )
 
@@ -131,11 +131,12 @@ class RemoteAnalysis:
 
 
 def remote_analysis(
-    files: Iterable[str],
+    files: Iterable[FileEntry],
     *,
     inventory_complete: bool = True,
     hints: AnalysisHints | None = None,
     max_rounds: int = DEFAULT_MAX_ROUNDS,
+    max_files: int | None = None,
     max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
 ) -> RemoteAnalysis:
     return RemoteAnalysis(
@@ -143,6 +144,7 @@ def remote_analysis(
         inventory_complete=inventory_complete,
         hints=hints,
         max_rounds=max_rounds,
+        max_files=max_files,
         max_file_bytes=max_file_bytes,
     )
 

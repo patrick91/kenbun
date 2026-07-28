@@ -13,8 +13,8 @@ dependencies = ["fastapi"]
 FASTAPI_APP = b"from fastapi import FastAPI\napp = FastAPI()\n"
 
 
-def entry(path: str) -> str:
-    return path
+def entry(path: str, *, size: int | None = None) -> kenbun.FileEntry:
+    return kenbun.FileEntry(path=path, size=size)
 
 
 def test_manifest_only_pass_does_not_request_scripts() -> None:
@@ -48,13 +48,32 @@ def test_analyze_accepts_generic_iterables_and_mappings() -> None:
 
 def test_analyze_applies_custom_file_limit() -> None:
     result = kenbun.analyze(
-        ["pyproject.toml"],
+        [entry("pyproject.toml")],
         {"pyproject.toml": b"12345"},
         max_file_bytes=4,
     )
 
     assert result.status == "complete"
     assert result.completeness == "partial"
+
+
+def test_analyze_skips_known_oversized_files() -> None:
+    result = kenbun.analyze(
+        [entry("pyproject.toml", size=5)],
+        max_file_bytes=4,
+    )
+
+    assert result.status == "complete"
+    assert result.completeness == "partial"
+    assert result.file_requests == []
+
+
+def test_analyze_applies_file_count_limit() -> None:
+    result = kenbun.analyze([entry("pyproject.toml")], max_files=0)
+
+    assert result.status == "complete"
+    assert result.completeness == "partial"
+    assert result.file_requests == []
 
 
 def test_script_hints_drive_incremental_entrypoint_resolution() -> None:
@@ -234,10 +253,15 @@ def test_manifest_requests_continue_past_the_first_batch() -> None:
 
 
 def test_invalid_inputs_fail_loudly() -> None:
-    with pytest.raises(TypeError, match=r"files\[0\] must be a string"):
+    with pytest.raises(TypeError, match=r"files\[0\]\.path must be a string"):
         kenbun.analyze([("pyproject.toml", 64)])
-    with pytest.raises(TypeError, match=r"files\[0\] must be a string"):
+    with pytest.raises(TypeError, match=r"files\[0\]\.path must be a string"):
         kenbun.analyze([{"size": 64}])
+    with pytest.raises(TypeError, match=r"files\[0\]\.size must be"):
+        kenbun.analyze([{"path": "pyproject.toml"}])
+    for size in (-1, True, 1.5):
+        with pytest.raises(TypeError, match=r"files\[0\]\.size must be"):
+            kenbun.analyze([{"path": "pyproject.toml", "size": size}])
     with pytest.raises(ValueError, match="repository-relative"):
         kenbun.analyze([entry("../pyproject.toml")])
     with pytest.raises(ValueError, match="unknown analysis hint"):

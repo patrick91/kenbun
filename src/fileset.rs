@@ -71,6 +71,7 @@ enum FileSource {
 
 struct VirtualSource {
     contents: BTreeMap<String, Option<Vec<u8>>>,
+    max_files: Option<u64>,
     max_file_bytes: u64,
     script_patterns: Vec<ScriptPattern>,
     script_hints_enabled: AtomicBool,
@@ -275,15 +276,24 @@ impl FileSet {
         let Some(priority) = requests.values().map(|request| request.priority).min() else {
             return Vec::new();
         };
-        let limit = if priority >= 40 {
+        let round_limit = if priority >= 40 {
             MAX_SCRIPT_REQUESTS_PER_ROUND
         } else {
             MAX_REQUESTS_PER_ROUND
         };
+        let remaining_files = source
+            .max_files
+            .map(|limit| limit.saturating_sub(source.contents.len() as u64))
+            .unwrap_or(u64::MAX);
+        if remaining_files == 0 {
+            source.unavailable_seen.store(true, Ordering::Relaxed);
+            return Vec::new();
+        }
+        let request_limit = round_limit.min(usize::try_from(remaining_files).unwrap_or(usize::MAX));
         requests
             .values()
             .filter(|request| request.priority == priority)
-            .take(limit)
+            .take(request_limit)
             .cloned()
             .collect()
     }
@@ -368,15 +378,16 @@ fn is_excluded_dir(path: &Path) -> bool {
 }
 
 pub fn virtual_files(
-    paths: Vec<String>,
+    entries: Vec<(String, u64)>,
     contents: BTreeMap<String, Option<Vec<u8>>>,
     script_patterns: Vec<String>,
+    max_files: Option<u64>,
     max_file_bytes: u64,
 ) -> Result<FileSet, String> {
     let mut all_entries = BTreeMap::new();
-    for path in paths {
+    for (path, size) in entries {
         validate_relative_path(&path)?;
-        if all_entries.insert(path.clone(), 0).is_some() {
+        if all_entries.insert(path.clone(), size).is_some() {
             return Err(format!("duplicate file inventory path: {path}"));
         }
     }
@@ -418,6 +429,10 @@ pub fn virtual_files(
         .keys()
         .filter(|path| path.rsplit('/').next() == Some(".gitignore"))
     {
+        if all_entries[path] > max_file_bytes {
+            unavailable_seen = true;
+            continue;
+        }
         match contents.get(path) {
             None => {
                 requests.insert(
@@ -495,6 +510,7 @@ pub fn virtual_files(
         issues,
         source: FileSource::Virtual(VirtualSource {
             contents,
+            max_files,
             max_file_bytes,
             script_patterns: compiled_patterns,
             script_hints_enabled: AtomicBool::new(false),
