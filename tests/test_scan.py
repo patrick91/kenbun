@@ -826,6 +826,49 @@ def test_unavailable_pyproject_is_diagnostic(tmp_path: Path) -> None:
     assert "KB801" in codes(result)
 
 
+LFS_POINTER = """\
+version https://git-lfs.github.com/spec/v1
+oid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393
+size 12345
+"""
+
+
+def test_lfs_pointer_manifest_is_not_parsed_as_its_content(tmp_path: Path) -> None:
+    """A pointer is metadata for content that was never fetched.
+
+    Its own size is tiny, so it passes every read cap; parsing it would report
+    facts that are not in the repository.
+    """
+    make(tmp_path, {"pyproject.toml": LFS_POINTER, "main.py": APP_MAIN})
+
+    result = kenbun.scan(tmp_path)
+
+    # Not KB201: the pointer must never reach the TOML parser.
+    assert "KB201" not in codes(result)
+    assert "KB801" in codes(result)
+    assert result.completeness == "partial"
+
+
+def test_unreadable_local_file_makes_the_scan_partial(tmp_path: Path) -> None:
+    """Read failures, not just walk failures, have to reach completeness."""
+    make(tmp_path, {"main.py": APP_MAIN})
+    (tmp_path / "pyproject.toml").write_bytes(b"\xff\xfe[project]\n")
+
+    result = kenbun.scan(tmp_path)
+
+    assert "KB801" in codes(result)
+    assert result.completeness == "partial"
+
+
+def test_readable_scan_stays_complete(tmp_path: Path) -> None:
+    make(tmp_path, {"pyproject.toml": FASTAPI_PYPROJECT, "main.py": APP_MAIN})
+
+    result = kenbun.scan(tmp_path)
+
+    assert result.completeness == "complete"
+    assert app(result).name == "demo"
+
+
 def test_distinct_diagnostic_messages_at_same_location_are_preserved(
     tmp_path: Path,
 ) -> None:

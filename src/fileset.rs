@@ -14,6 +14,8 @@ use crate::model::FileRequest;
 pub const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 const MAX_REQUESTS_PER_ROUND: usize = 64;
 const MAX_SCRIPT_REQUESTS_PER_ROUND: usize = 16;
+/// First line of a Git LFS pointer, per the LFS v1 spec.
+const LFS_POINTER_PREFIX: &[u8] = b"version https://git-lfs.github.com/spec/v1";
 
 pub fn read_bounded_path(path: &Path) -> Option<String> {
     String::from_utf8(read_bounded_bytes(path)?).ok()
@@ -61,6 +63,9 @@ pub struct FileSet {
     /// Filesystem entries omitted from the scan, with a stable display path
     /// and the underlying reason.
     pub issues: Vec<FileIssue>,
+    /// Set when a read could not yield usable content. Tracked for both sources
+    /// so local and virtual scans report completeness the same way.
+    unavailable: AtomicBool,
     source: FileSource,
 }
 
@@ -77,7 +82,6 @@ struct VirtualSource {
     script_hints_enabled: AtomicBool,
     allowed_scripts: Mutex<BTreeSet<String>>,
     requests: Mutex<BTreeMap<String, FileRequest>>,
-    unavailable_seen: AtomicBool,
 }
 
 struct ScriptPattern {
@@ -98,6 +102,7 @@ impl FileSet {
             files,
             truncated: false,
             issues: Vec::new(),
+            unavailable: AtomicBool::new(false),
             source: FileSource::Local,
         }
     }
@@ -142,6 +147,18 @@ impl FileSet {
     }
 
     pub fn read(&self, rel: &str) -> Option<Vec<u8>> {
+        let bytes = self.read_source(rel)?;
+        // A pointer describes content that was never fetched. Its size is the
+        // pointer's, so it slips past every cap; parsing it as the real file
+        // invents facts about the repository.
+        if bytes.starts_with(LFS_POINTER_PREFIX) {
+            self.mark_unavailable();
+            return None;
+        }
+        Some(bytes)
+    }
+
+    fn read_source(&self, rel: &str) -> Option<Vec<u8>> {
         let size = *self.files.get(rel)?;
         let max_file_bytes = match &self.source {
             FileSource::Local => MAX_FILE_BYTES,
@@ -164,7 +181,7 @@ impl FileSet {
                     Some(bytes.clone())
                 }
                 Some(_) => {
-                    source.unavailable_seen.store(true, Ordering::Relaxed);
+                    self.mark_unavailable();
                     None
                 }
                 None => {
@@ -264,7 +281,7 @@ impl FileSet {
     }
 
     pub fn unavailable_seen(&self) -> bool {
-        matches!(&self.source, FileSource::Virtual(source) if source.unavailable_seen.load(Ordering::Relaxed))
+        self.unavailable.load(Ordering::Relaxed)
             || matches!(&self.source, FileSource::Local) && !self.issues.is_empty()
     }
 
@@ -286,7 +303,7 @@ impl FileSet {
             .map(|limit| limit.saturating_sub(source.contents.len() as u64))
             .unwrap_or(u64::MAX);
         if remaining_files == 0 {
-            source.unavailable_seen.store(true, Ordering::Relaxed);
+            self.mark_unavailable();
             return Vec::new();
         }
         let request_limit = round_limit.min(usize::try_from(remaining_files).unwrap_or(usize::MAX));
@@ -303,9 +320,7 @@ impl FileSet {
     }
 
     fn mark_unavailable(&self) {
-        if let FileSource::Virtual(source) = &self.source {
-            source.unavailable_seen.store(true, Ordering::Relaxed);
-        }
+        self.unavailable.store(true, Ordering::Relaxed);
     }
 }
 
@@ -508,6 +523,7 @@ pub fn virtual_files(
         files,
         truncated: false,
         issues,
+        unavailable: AtomicBool::new(unavailable_seen),
         source: FileSource::Virtual(VirtualSource {
             contents,
             max_files,
@@ -516,7 +532,6 @@ pub fn virtual_files(
             script_hints_enabled: AtomicBool::new(false),
             allowed_scripts: Mutex::new(BTreeSet::new()),
             requests: Mutex::new(requests),
-            unavailable_seen: AtomicBool::new(unavailable_seen),
         }),
     })
 }
@@ -595,6 +610,7 @@ pub fn walk_fs(
             files,
             truncated,
             issues,
+            unavailable: AtomicBool::new(false),
             source: FileSource::Local,
         };
     }
@@ -693,6 +709,7 @@ pub fn walk_fs(
         files,
         truncated,
         issues,
+        unavailable: AtomicBool::new(false),
         source: FileSource::Local,
     }
 }

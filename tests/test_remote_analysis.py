@@ -136,3 +136,34 @@ def test_remote_analysis_requires_non_negative_file_limit(max_files: int) -> Non
 def test_remote_analysis_requires_positive_file_limit(max_file_bytes: int) -> None:
     with pytest.raises(ValueError, match="positive integer"):
         kenbun.remote_analysis([], max_file_bytes=max_file_bytes)
+
+
+LFS_POINTER = (
+    b"version https://git-lfs.github.com/spec/v1\n"
+    b"oid sha256:4d7a214614ab2935c943f9e0ff69d22eadbb8f32b1258daaa5e2ca24d17e2393\n"
+    b"size 12345\n"
+)
+
+
+def test_lfs_pointer_content_is_treated_as_unavailable() -> None:
+    """Hosts serve pointers for LFS-tracked files, and the tree reports the
+    pointer's size, so they cannot be filtered out before the fetch."""
+    analysis = kenbun.remote_analysis(
+        [entry("requirements.txt", size=len(LFS_POINTER))],
+    )
+
+    analysis.update({"requirements.txt": LFS_POINTER})
+
+    # Passing the pointer through would let a line-oriented manifest parse
+    # cleanly and report a completeness it has not earned.
+    assert analysis.result.completeness == "partial"
+
+
+def test_real_content_still_completes() -> None:
+    analysis = kenbun.remote_analysis(
+        [entry("pyproject.toml", size=len(FASTAPI_MANIFEST))],
+    )
+
+    analysis.update({"pyproject.toml": FASTAPI_MANIFEST})
+
+    assert analysis.result.completeness == "complete"
