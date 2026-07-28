@@ -2,11 +2,11 @@
 
 use std::path::{Path, PathBuf};
 
+use super::node::{self, RawNodeDiscovery};
+use super::python::manifest::{parse_pyproject, UvWorkspace};
 use crate::diag;
 use crate::fileset::{read_bounded_path, FileSet};
 use crate::model::{Diagnostic, Workspace};
-use crate::node::{self, RawNodeDiscovery};
-use crate::python::manifest::{parse_pyproject, UvWorkspace};
 
 /// Result of upward discovery: the directory the
 /// walk should actually start from, plus the relative frames for the result.

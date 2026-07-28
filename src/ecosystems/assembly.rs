@@ -4,10 +4,10 @@
 //! This module reconciles contributions that share an application directory,
 //! applies cross-ecosystem rules, and constructs the public application model.
 
+use super::node::{RawNodeDiscovery, RawNodePackage, RawTechnologySignal};
+use super::python::Project;
 use crate::diag;
 use crate::model::*;
-use crate::node::{RawNodeDiscovery, RawNodePackage, RawTechnologySignal};
-use crate::python::Project;
 
 pub(crate) fn applications(
     projects: &[Project],

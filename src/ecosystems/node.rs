@@ -10,9 +10,9 @@ mod command;
 mod manifest;
 mod workspace;
 
-use crate::boundary;
+use super::boundary;
+use super::runtime::{self, RuntimePin};
 use crate::fileset::FileSet;
-use crate::runtime::{self, RuntimePin};
 use command::{command_invokes, command_invokes_subcommand};
 use manifest::{parse_package_json, PackageManifest};
 use workspace::expand_workspace_patterns;

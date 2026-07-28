@@ -15,13 +15,13 @@ local path or remote inventory
             |
       +-----+----------------------+
       |                            |
-python::discover()           node::discover()
+ecosystems::python           ecosystems::node
       |                            |
 Python projects               raw Node facts
       |                       /            \
       +----------------------+              \
                  |                            |
-      assembly::applications()    workspace::discover_at_root()
+ ecosystems::assembly          ecosystems::workspace
                  |                            |
           applications                    workspace
                  +-------------+--------------+
@@ -40,19 +40,25 @@ directly so both analysis modes retain the same behavior.
   GIL, and delegates to the Rust analysis pipeline.
 - `scan.rs` owns the analysis lifecycle: input framing, hint validation,
   detector invocation, completeness, and final diagnostics.
-- `python.rs` owns Python project discovery and Python-specific candidate
-  types. `python/manifest.rs` parses dependency metadata and
-  `python/entrypoint.rs` performs static FastAPI entrypoint resolution.
-- `node.rs` coordinates JavaScript/TypeScript discovery.
-  `node/manifest.rs`, `node/workspace.rs`, and `node/command.rs` own their
-  respective parsing concerns.
-- `assembly.rs` is the only place that combines ecosystem facts into public
-  `Application` values. It preserves same-directory enrichment and applies
-  cross-ecosystem rules such as Cross Inertia.
-- `workspace.rs` owns upward workspace framing and reconciliation of uv and
-  Node workspace facts.
-- `boundary.rs` owns the shared set of Python and Node project-boundary
-  markers used to prevent nested source evidence from leaking into a parent.
+- `ecosystems/` contains the concrete detectors and their shared
+  reconciliation logic.
+- `ecosystems/python.rs` owns Python project discovery and Python-specific
+  candidate types. `ecosystems/python/manifest.rs` parses dependency metadata
+  and `ecosystems/python/entrypoint.rs` performs static FastAPI entrypoint
+  resolution.
+- `ecosystems/node.rs` coordinates JavaScript/TypeScript discovery.
+  `ecosystems/node/manifest.rs`, `ecosystems/node/workspace.rs`, and
+  `ecosystems/node/command.rs` own their respective parsing concerns.
+- `ecosystems/assembly.rs` is the only place that combines ecosystem facts
+  into public `Application` values. It preserves same-directory enrichment and
+  applies cross-ecosystem rules such as Cross Inertia.
+- `ecosystems/workspace.rs` owns upward workspace framing and reconciliation
+  of uv and Node workspace facts.
+- `ecosystems/runtime.rs` owns shared declarative Python and Node
+  runtime-version facts.
+- `ecosystems/boundary.rs` owns the shared set of Python and Node
+  project-boundary markers used to prevent nested source evidence from leaking
+  into a parent.
 - `model.rs` contains only the public output schema. Detector-private
   candidates belong to their detector modules.
 

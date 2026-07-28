@@ -1,14 +1,8 @@
-mod assembly;
-mod boundary;
 mod diag;
+mod ecosystems;
 mod fileset;
 mod model;
-mod node;
-mod norm;
-mod python;
-mod runtime;
 mod scan;
-mod workspace;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;

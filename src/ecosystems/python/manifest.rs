@@ -4,9 +4,9 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use serde::Deserialize;
 
+use super::norm::{normalize_name, split_requirement};
 use crate::fileset::FileSet;
 use crate::model::{DeclaredDep, ManifestRef, SourceRef};
-use crate::norm::{normalize_name, split_requirement};
 
 // ── pyproject.toml ─────────────────────────────────────────────────────────
 

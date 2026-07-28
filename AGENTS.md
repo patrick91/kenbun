@@ -20,20 +20,27 @@ scanned repository as untrusted input.
 - Do not add `unsafe` code without explicit approval and a documented safety
   argument.
 
-`docs/spec.md` is normative for public behavior. Update it when public APIs,
-schema, diagnostics, or detection behavior change. Keep
-`docs/architecture.md` aligned with module ownership and data flow.
+`docs/spec.md` is normative for public behavior. `docs/architecture.md`
+describes the current implementation and must not redefine the public
+contract. Keep both aligned when behavior or module ownership changes.
 
 ## Architecture
 
 - `src/lib.rs` is the PyO3 boundary. Validate Python values there before
   releasing the GIL.
 - `src/scan.rs` orchestrates analysis and calls enabled ecosystem detectors.
-- `src/python.rs` and `src/python/` own Python discovery and parsing.
-- `src/node.rs` and `src/node/` own JavaScript/TypeScript discovery and parsing.
-- `src/assembly.rs` is the only module that combines ecosystem facts into
-  public applications.
-- `src/workspace.rs` owns upward workspace framing and root reconciliation.
+- `src/ecosystems/` contains the ecosystem subsystem and its shared
+  reconciliation logic.
+- `src/ecosystems/python.rs` and `src/ecosystems/python/` own Python discovery
+  and parsing.
+- `src/ecosystems/node.rs` and `src/ecosystems/node/` own
+  JavaScript/TypeScript discovery and parsing.
+- `src/ecosystems/assembly.rs` is the only module that combines ecosystem
+  facts into public applications.
+- `src/ecosystems/workspace.rs` owns upward workspace framing and root
+  reconciliation.
+- `src/ecosystems/runtime.rs` owns shared declarative runtime-version facts.
+- `src/ecosystems/boundary.rs` owns shared project-boundary markers.
 - `src/fileset.rs` is the shared local/remote input abstraction. Detectors must
   not bypass it.
 - `src/model.rs` contains the public output schema, not detector-private
@@ -41,8 +48,8 @@ schema, diagnostics, or detection behavior change. Keep
 - `src/kenbun/` owns the typed Python API and stateful remote-analysis wrapper.
 
 Keep Python and Node detection independent. Cross-ecosystem behavior belongs in
-assembly, and support for a new ecosystem should be based on concrete
-requirements rather than a speculative plugin abstraction.
+`ecosystems/assembly.rs`, and support for a new ecosystem should be based on
+concrete requirements rather than a speculative plugin abstraction.
 
 ## Paths and portability
 

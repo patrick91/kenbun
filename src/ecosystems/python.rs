@@ -8,13 +8,14 @@ use std::collections::BTreeSet;
 
 mod entrypoint;
 pub(crate) mod manifest;
+mod norm;
 
+use super::runtime;
 use crate::diag;
 use crate::fileset::FileSet;
 use crate::model::{
     DeclaredDep, DependencySet, Diagnostic, Entrypoint, EnvVar, Evidence, PythonInfo, VersionPin,
 };
-use crate::runtime;
 use entrypoint::Resolution;
 use manifest::PyProject;
 

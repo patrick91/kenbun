@@ -2,13 +2,10 @@
 
 use std::path::Path;
 
-use crate::assembly;
 use crate::diag;
+use crate::ecosystems::{assembly, node, python, workspace};
 use crate::fileset::{self, FileSet};
 use crate::model::*;
-use crate::node;
-use crate::python;
-use crate::workspace;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 /// The ecosystem detectors enabled for one analysis.
