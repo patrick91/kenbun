@@ -1,4 +1,6 @@
-from typing import TypedDict
+from typing import Literal, TypeAlias, TypedDict
+
+Ecosystem: TypeAlias = Literal["python", "node"]
 
 
 class AnalysisHints(TypedDict, total=False):
@@ -10,4 +12,4 @@ class FileEntry(TypedDict):
     size: int | None
 
 
-__all__ = ["AnalysisHints", "FileEntry"]
+__all__ = ["AnalysisHints", "Ecosystem", "FileEntry"]

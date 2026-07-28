@@ -31,6 +31,7 @@ The words **must**, **must not**, **should**, and **may** are normative.
 def scan(
     root: str | os.PathLike[str],
     *,
+    ecosystems: Iterable[Literal["python", "node"]] | None = None,
     application_dir: str | None = None,
     entrypoint: str | None = None,
     max_files: int | None = None,
@@ -42,6 +43,13 @@ def scan(
 `root` must identify a real directory. Local scans satisfy reads immediately
 and therefore return `status="complete"` with no `file_requests`.
 
+`ecosystems` selects which detectors run. `None` selects both supported
+ecosystems. `"python"` selects Python and `"node"` selects modern JavaScript
+and TypeScript. Order and duplicates have no effect. A selection must be a
+non-string iterable containing at least one supported name; invalid values
+raise `TypeError` or `ValueError`. Excluded ecosystems do not contribute
+workspace framing, manifest reads, applications, facts, or diagnostics.
+
 `application_dir` is an optional path relative to the caller-supplied scan root.
 Kenbun translates it into the effective workspace root, validates that it
 remains under the caller's root, exists, and matches a detected application. It
@@ -52,7 +60,8 @@ the absence of `application_dir`, it applies to the application containing the
 scan origin.
 
 `entrypoint` uses `module:attribute` syntax and is currently interpreted only
-by the FastAPI resolver. It is validated against statically parsed source.
+by the FastAPI resolver. It is validated against statically parsed source and
+therefore requires the Python ecosystem.
 
 `max_files` bounds the filesystem walk. Exceeding it returns the partial facts
 with `KB802`. Symlinks are not followed unless `follow_symlinks=True`; when
@@ -78,6 +87,7 @@ class FileEntry(TypedDict):
 def remote_analysis(
     files: Iterable[FileEntry],
     *,
+    ecosystems: Iterable[Literal["python", "node"]] | None = None,
     inventory_complete: bool = True,
     hints: AnalysisHints | None = None,
     max_rounds: int = 20,
@@ -89,6 +99,7 @@ def analyze(
     files: Iterable[FileEntry],
     contents: Mapping[str, bytes | None] | None = None,
     *,
+    ecosystems: Iterable[Literal["python", "node"]] | None = None,
     inventory_complete: bool = True,
     hints: AnalysisHints | None = None,
     max_files: int | None = None,
@@ -107,6 +118,11 @@ requested; entries already present in `contents` consume that budget. Once
 exhausted, later reads are treated as unavailable. `max_file_bytes` configures
 the per-file parse cap used by both the stateless primitive and remote session.
 Oversized stateless contents are treated as unavailable.
+
+`ecosystems` has the same semantics as `scan()`. It limits manifest and source
+requests as well as the returned facts. `RemoteAnalysis` snapshots the
+selection when the session is created, so one-shot iterables remain stable
+across analysis rounds.
 
 `remote_analysis()` creates a stateful analysis over that inventory. Its
 `file_requests` property contains the current ordered `list[FileRequest]`.

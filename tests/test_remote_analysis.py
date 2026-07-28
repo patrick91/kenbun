@@ -37,6 +37,22 @@ def test_remote_analysis_drives_incremental_analysis() -> None:
     assert analysis.result.applications[0].entrypoint.as_string == "app:app"
 
 
+def test_remote_analysis_preserves_selected_ecosystems_across_rounds() -> None:
+    ecosystems = (ecosystem for ecosystem in ["python"])
+    analysis = kenbun.remote_analysis(
+        [entry("pyproject.toml"), entry("package.json")],
+        ecosystems=ecosystems,
+    )
+
+    assert [request.path for request in analysis.file_requests] == ["pyproject.toml"]
+
+    analysis.update({"pyproject.toml": FASTAPI_MANIFEST})
+
+    application = analysis.result.applications[0]
+    assert {item.ecosystem for item in application.dependencies} == {"python"}
+    assert application.node is None
+
+
 def test_remote_analysis_accepts_unavailable_content() -> None:
     analysis = kenbun.remote_analysis([entry("pyproject.toml")])
 
@@ -136,6 +152,14 @@ def test_remote_analysis_requires_non_negative_file_limit(max_files: int) -> Non
 def test_remote_analysis_requires_positive_file_limit(max_file_bytes: int) -> None:
     with pytest.raises(ValueError, match="positive integer"):
         kenbun.remote_analysis([], max_file_bytes=max_file_bytes)
+
+
+def test_remote_analysis_rejects_a_bare_ecosystem_string() -> None:
+    with pytest.raises(TypeError) as error:
+        kenbun.remote_analysis([], ecosystems="python")  # type: ignore[arg-type]
+    assert str(error.value) == (
+        "ecosystems must be an iterable of ecosystem names, not a string"
+    )
 
 
 LFS_POINTER = (

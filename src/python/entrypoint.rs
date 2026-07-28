@@ -354,7 +354,7 @@ pub fn module_path(fs: &FileSet, project_dir: &str, file: &str) -> (String, Stri
 }
 
 pub struct Resolution {
-    #[allow(dead_code)] // M2: KB302/anchoring diagnostics to the file
+    #[expect(dead_code, reason = "reserved for KB302 diagnostic anchoring")]
     pub file: String,
     pub module: String,
     pub attribute: String,

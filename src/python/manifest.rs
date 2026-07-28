@@ -49,10 +49,10 @@ pub struct UvTable {
     pub workspace: Option<UvWorkspace>,
     #[serde(rename = "dev-dependencies")]
     pub dev_dependencies: Option<Vec<String>>,
-    #[allow(dead_code)] // M2: path-dep linking + env-var aggregation
+    #[expect(dead_code, reason = "reserved for path-dependency linking")]
     pub sources: Option<toml::Table>,
     #[serde(rename = "default-groups")]
-    #[allow(dead_code)] // M2: literal default-groups in the KB301 rule
+    #[expect(dead_code, reason = "reserved for the KB301 default-groups rule")]
     pub default_groups: Option<toml::Value>,
 }
 

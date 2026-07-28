@@ -237,6 +237,29 @@ def test_same_root_primary_frameworks_share_one_application(tmp_path: Path) -> N
     assert primary == {"fastapi", "nextjs"}
     assert "KB101" in [diagnostic.code for diagnostic in result.diagnostics]
 
+    python_application = app(kenbun.scan(tmp_path, ecosystems={"python"}))
+    assert {item.name for item in python_application.technologies} == {
+        "fastapi",
+        "python",
+    }
+    assert {item.ecosystem for item in python_application.dependencies} == {"python"}
+    assert python_application.python is not None
+    assert python_application.node is None
+
+    node_application = app(kenbun.scan(tmp_path, ecosystems=["node", "node"]))
+    assert {item.name for item in node_application.technologies} == {
+        "javascript",
+        "nextjs",
+        "react",
+    }
+    assert {item.ecosystem for item in node_application.dependencies} == {"node"}
+    assert node_application.python is None
+    assert node_application.node is not None
+
+    with pytest.raises(ValueError) as error:
+        kenbun.scan(tmp_path, ecosystems=["node"], entrypoint="main:app")
+    assert str(error.value) == "entrypoint requires the 'python' ecosystem"
+
 
 def test_node_primary_preserves_same_root_python_library_facts(tmp_path: Path) -> None:
     make(
@@ -356,6 +379,26 @@ def test_mixed_uv_and_node_workspace_discovers_node_member(tmp_path: Path) -> No
         "apps/site",
         "backend/api",
     ]
+
+    python_result = kenbun.scan(tmp_path, ecosystems={"python"})
+    assert python_result.workspace.kind == "uv"
+    assert python_result.workspace.members == [".", "backend/api"]
+    assert [item.application_dir for item in python_result.applications] == [
+        "backend/api"
+    ]
+
+    node_result = kenbun.scan(tmp_path, ecosystems={"node"})
+    assert node_result.workspace.kind == "pnpm"
+    assert node_result.workspace.members == [".", "apps/site"]
+    assert [item.application_dir for item in node_result.applications] == ["apps/site"]
+
+    python_from_node_member = kenbun.scan(
+        tmp_path / "apps" / "site" / "src",
+        ecosystems={"python"},
+    )
+    assert python_from_node_member.upload_root == "."
+    assert python_from_node_member.workspace is None
+    assert python_from_node_member.applications == []
 
 
 def test_workspace_virtual_root_follows_root_application(tmp_path: Path) -> None:

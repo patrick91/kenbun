@@ -181,6 +181,40 @@ def test_lockfile_inventory_infers_manager_without_requesting_contents() -> None
     assert result.applications[0].build_scripts[0].package_manager == "npm"
 
 
+def test_analyze_requests_and_reports_only_selected_ecosystems() -> None:
+    files = [entry("pyproject.toml"), entry("package.json")]
+    package = b'{"dependencies": {"next": "16", "react": "19"}}'
+
+    python_first = kenbun.analyze(files, ecosystems={"python"})
+    assert [request.path for request in python_first.file_requests] == [
+        "pyproject.toml"
+    ]
+    python_result = kenbun.analyze(
+        files,
+        {"pyproject.toml": FASTAPI_MANIFEST},
+        ecosystems={"python"},
+    )
+    assert python_result.status == "complete"
+    assert {
+        dependency.ecosystem
+        for dependency in python_result.applications[0].dependencies
+    } == {"python"}
+    assert python_result.applications[0].node is None
+
+    node_first = kenbun.analyze(files, ecosystems=("node",))
+    assert [request.path for request in node_first.file_requests] == ["package.json"]
+    node_result = kenbun.analyze(
+        files,
+        {"package.json": package},
+        ecosystems=("node",),
+    )
+    assert node_result.status == "complete"
+    assert {
+        dependency.ecosystem for dependency in node_result.applications[0].dependencies
+    } == {"node"}
+    assert node_result.applications[0].python is None
+
+
 def test_unavailable_content_terminates_with_partial_result() -> None:
     files = [entry("pyproject.toml")]
 
@@ -294,3 +328,19 @@ def test_invalid_inputs_fail_loudly() -> None:
         kenbun.analyze([], hints={"script_patterns": ["../*.py"]})
     with pytest.raises(ValueError, match="positive integer"):
         kenbun.analyze([], max_file_bytes=0)
+    with pytest.raises(TypeError) as error:
+        kenbun.analyze([], ecosystems="python")
+    assert str(error.value) == (
+        "ecosystems must be an iterable of ecosystem names, not a string"
+    )
+    with pytest.raises(TypeError) as error:
+        kenbun.analyze([], ecosystems=["python", 1])
+    assert str(error.value) == "ecosystems must contain only strings"
+    with pytest.raises(ValueError) as error:
+        kenbun.analyze([], ecosystems=[])
+    assert str(error.value) == (
+        "ecosystems must contain at least one of: 'python', 'node'"
+    )
+    with pytest.raises(ValueError) as error:
+        kenbun.analyze([], ecosystems=["ruby"])
+    assert str(error.value) == "unknown ecosystem 'ruby'; expected 'python' or 'node'"

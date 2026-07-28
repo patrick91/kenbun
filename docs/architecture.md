@@ -11,6 +11,8 @@ local path or remote inventory
             |
           FileSet
             |
+      EcosystemSelection
+            |
       +-----+----------------------+
       |                            |
 python::discover()           node::discover()
@@ -58,6 +60,9 @@ directly so both analysis modes retain the same behavior.
 
 - Python and Node detection run independently; neither ecosystem is the base
   representation for the other.
+- Ecosystem selection gates detector invocation, workspace discovery, and
+  remote file requests at orchestration boundaries. Disabled detectors do not
+  read their manifests or contribute facts and diagnostics.
 - One public application is emitted per `application_dir`.
 - A non-primary contribution may enrich a primary contribution at the same
   directory. For example, a Python library can contribute dependency and

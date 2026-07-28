@@ -21,7 +21,7 @@ from kenbun._kenbun import (
     scan,
 )
 from kenbun._remote import RemoteAnalysis, remote_analysis
-from kenbun._types import AnalysisHints, FileEntry
+from kenbun._types import AnalysisHints, Ecosystem, FileEntry
 
 __all__ = [
     "AnalysisHints",
@@ -30,6 +30,7 @@ __all__ = [
     "DeclaredDep",
     "DependencySet",
     "Diagnostic",
+    "Ecosystem",
     "Entrypoint",
     "EnvVar",
     "Evidence",

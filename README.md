@@ -20,6 +20,7 @@ import kenbun
 
 result = kenbun.scan(
     Path("."),
+    ecosystems={"python", "node"},  # optional; defaults to both
     application_dir=None,  # optional repository-relative hint
 )
 
@@ -57,6 +58,13 @@ while file_requests := analysis.file_requests:
 
 result = analysis.result
 ```
+
+Pass `ecosystems={"python"}` or `ecosystems={"node"}` to `scan()`,
+`analyze()`, or `remote_analysis()` to restrict discovery. The `"node"`
+ecosystem covers both JavaScript and TypeScript. Selection also limits
+workspace discovery and remote file requests; omitted ecosystems do not
+contribute applications, facts, or diagnostics. `None` keeps the default of
+analyzing both ecosystems.
 
 Each `FileEntry` contains a path and its repository-reported size, or `None`
 when the size is unknown. Kenbun does not request entries known to exceed
@@ -139,7 +147,11 @@ Build the extension and run the tests with:
 
 ```bash
 uv run maturin develop --uv
-uv run pytest
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
+uv run ruff check .
+uv run ruff format --check .
+uv run pytest -q
 cargo deny check
 ```

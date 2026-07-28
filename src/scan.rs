@@ -10,16 +10,33 @@ use crate::node;
 use crate::python;
 use crate::workspace;
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// The ecosystem detectors enabled for one analysis.
+pub(crate) struct EcosystemSelection {
+    pub python: bool,
+    pub node: bool,
+}
+
+impl Default for EcosystemSelection {
+    fn default() -> Self {
+        Self {
+            python: true,
+            node: true,
+        }
+    }
+}
+
 pub struct ScanOptions {
     pub application_dir: Option<String>,
     pub entrypoint: Option<String>,
+    pub ecosystems: EcosystemSelection,
     pub max_files: Option<u64>,
     pub follow_symlinks: bool,
     pub extra_ignore_files: Vec<String>,
 }
 
 pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
-    let effective = workspace::discover_upward(root);
+    let effective = workspace::discover_upward(root, opts.ecosystems.python, opts.ecosystems.node);
     let fs = fileset::walk_fs(
         &effective.walk_root,
         opts.max_files,
@@ -39,10 +56,15 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
     result
 }
 
-pub fn analyze(fs: &FileSet, inventory_complete: bool) -> ScanResult {
+pub fn analyze(
+    fs: &FileSet,
+    inventory_complete: bool,
+    ecosystems: EcosystemSelection,
+) -> ScanResult {
     let opts = ScanOptions {
         application_dir: None,
         entrypoint: None,
+        ecosystems,
         max_files: None,
         follow_symlinks: false,
         extra_ignore_files: Vec::new(),
@@ -114,7 +136,11 @@ fn scan_fileset(
         scan_diagnostics.push(diag::kb802(opts.max_files.unwrap_or(0)));
     }
 
-    let node_discovery = node::discover(fs);
+    let node_discovery = if opts.ecosystems.node {
+        node::discover(fs)
+    } else {
+        node::RawNodeDiscovery::default()
+    };
     scan_diagnostics.extend(
         node_discovery
             .parse_errors
@@ -122,16 +148,25 @@ fn scan_fileset(
             .map(|error| diag::kb203(&error.path, &error.message)),
     );
 
-    let workspace_info = workspace::discover_at_root(fs, &node_discovery);
+    let workspace_info = workspace::discover_at_root(
+        fs,
+        &node_discovery,
+        opts.ecosystems.python,
+        opts.ecosystems.node,
+    );
     scan_diagnostics.extend(workspace_info.diagnostics);
     let mut workspace = workspace_info.workspace;
     let hint_dir = validate_application_dir(fs, opts, &scan_origin, &mut scan_diagnostics);
-    let projects = python::discover(
-        fs,
-        hint_dir.as_deref(),
-        &scan_origin,
-        opts.entrypoint.as_deref(),
-    );
+    let projects = if opts.ecosystems.python {
+        python::discover(
+            fs,
+            hint_dir.as_deref(),
+            &scan_origin,
+            opts.entrypoint.as_deref(),
+        )
+    } else {
+        Vec::new()
+    };
     let applications = assembly::applications(&projects, &node_discovery);
 
     if let Some(workspace) = &mut workspace {

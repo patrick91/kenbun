@@ -71,6 +71,9 @@ directory hint from `target_dir` to `application_dir`.
 
 ## Unreleased
 
+- Allow callers to select the Python and/or Node ecosystems for local,
+  stateless remote, and stateful remote analysis. Selection also limits
+  workspace discovery and remote file requests.
 - Add `remote_analysis()` for stateful incremental repository analysis, backed
   by the pure `analyze()` primitive. Remote inventories contain paths and
   optional repository-reported sizes, allowing Kenbun to skip files above its
