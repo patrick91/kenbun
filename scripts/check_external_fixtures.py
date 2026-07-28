@@ -213,7 +213,7 @@ def projection(result: Any) -> dict[str, Any]:
 
 def expected_projection(expected: dict[str, Any]) -> dict[str, Any]:
     expanded = {
-        "schema_version": 1,
+        "schema_version": 3,
         "upload_root": ".",
         "scan_origin": ".",
         "workspace": None,

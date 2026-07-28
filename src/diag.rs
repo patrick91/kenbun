@@ -163,16 +163,6 @@ pub fn kb301(path: &str, framework: &str, group: &str) -> Diagnostic {
     )
 }
 
-pub fn kb305(path: &str, lockfiles: &[String]) -> Diagnostic {
-    new(
-        "KB305",
-        WARNING,
-        format!("multiple lockfiles present: {}", lockfiles.join(", ")),
-        Some(path.to_string()),
-        None,
-    )
-}
-
 pub fn kb306(path: &str, manager: &str) -> Diagnostic {
     new(
         "KB306",

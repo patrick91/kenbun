@@ -28,6 +28,81 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
         opts.follow_symlinks,
         &opts.extra_ignore_files,
     );
+    let mut result = scan_fileset(
+        &fs,
+        opts,
+        root.to_string_lossy().to_string(),
+        effective.upload_root,
+        effective.scan_origin,
+    );
+    if fs.truncated || fs.unavailable_seen() {
+        result.completeness = "partial".to_string();
+    }
+    result
+}
+
+pub fn analyze(fs: &FileSet, inventory_complete: bool) -> ScanResult {
+    let opts = ScanOptions {
+        application_dir: None,
+        entrypoint: None,
+        max_files: None,
+        follow_symlinks: false,
+        extra_ignore_files: Vec::new(),
+    };
+    if fs.has_ignore_requests() {
+        return finish_virtual_result(
+            ScanResult {
+                schema_version: SCHEMA_VERSION,
+                root: ".".to_string(),
+                upload_root: ".".to_string(),
+                scan_origin: ".".to_string(),
+                status: "complete".to_string(),
+                completeness: "complete".to_string(),
+                file_requests: Vec::new(),
+                workspace: None,
+                applications: Vec::new(),
+                diagnostics: Vec::new(),
+            },
+            fs,
+            inventory_complete,
+        );
+    }
+    let result = scan_fileset(fs, &opts, ".".to_string(), ".".to_string(), ".".to_string());
+    finish_virtual_result(result, fs, inventory_complete)
+}
+
+fn finish_virtual_result(
+    mut result: ScanResult,
+    fs: &FileSet,
+    inventory_complete: bool,
+) -> ScanResult {
+    result.file_requests = fs.requests();
+    result.status = if result.file_requests.is_empty() {
+        "complete".to_string()
+    } else {
+        "needs_files".to_string()
+    };
+    let identity_parse_failed = result
+        .diagnostics
+        .iter()
+        .any(|diagnostic| matches!(diagnostic.code.as_str(), "KB201" | "KB203"));
+    if !inventory_complete
+        || fs.unavailable_seen()
+        || identity_parse_failed
+        || !result.file_requests.is_empty()
+    {
+        result.completeness = "partial".to_string();
+    }
+    result
+}
+
+fn scan_fileset(
+    fs: &FileSet,
+    opts: &ScanOptions,
+    root: String,
+    upload_root: String,
+    scan_origin: String,
+) -> ScanResult {
     let mut scan_diags: Vec<Diagnostic> = Vec::new();
     for issue in &fs.issues {
         let diagnostic = if issue.message.contains("scan root") {
@@ -40,19 +115,12 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
     if fs.truncated {
         scan_diags.push(diag::kb802(opts.max_files.unwrap_or(0)));
     }
-    let node_discovery = node::discover(&fs);
+    let node_discovery = node::discover(fs);
     scan_diags.extend(
         node_discovery
             .parse_errors
             .iter()
             .map(|error| diag::kb203(&error.path, &error.message)),
-    );
-    scan_diags.extend(
-        node_discovery
-            .packages
-            .iter()
-            .filter(|package| package.package_manager_candidates.len() > 1)
-            .map(|package| diag::kb308(&package.path, &package.package_manager_candidates)),
     );
 
     // ── workspace at the effective root ────────────────────────────────
@@ -68,7 +136,7 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
     let mut ws_info = None;
     if let Some(ws) = &ws_table {
         let has_project = root_parsed.as_ref().is_some_and(|pp| pp.project.is_some());
-        let info = workspace::expand_workspace(&fs, ws, has_project);
+        let info = workspace::expand_workspace(fs, ws, has_project);
         scan_diags.extend(info.diagnostics.clone());
         ws_info = Some(info.workspace);
     }
@@ -79,9 +147,6 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
     {
         for pattern in &node_workspace.unmatched_patterns {
             scan_diags.push(diag::kb402(".", pattern));
-        }
-        if node_workspace.package_manager_candidates.len() > 1 {
-            scan_diags.push(diag::kb308(".", &node_workspace.package_manager_candidates));
         }
         let mut node_members = node_workspace.members.clone();
         if let Some(workspace) = &mut ws_info {
@@ -135,10 +200,10 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
         if is_absolute_like(raw) || normalized.starts_with("..") {
             scan_diags.push(diag::kb501(raw));
         } else {
-            let scan_origin = if effective.scan_origin == "." {
+            let scan_origin = if scan_origin == "." {
                 String::new()
             } else {
-                effective.scan_origin.clone()
+                scan_origin.clone()
             };
             let as_project = if normalized == "." {
                 scan_origin
@@ -160,17 +225,16 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
     }
 
     // ── per-project analysis ───────────────────────────────────────────
-    let workspace_lock = fs.contains("uv.lock");
     let mut projects: Vec<Project> = Vec::new();
     for dir in &project_dirs {
         let hint_entry = if hint_dir.as_deref() == Some(dir.as_str())
-            || (hint_dir.is_none() && origin_matches(&effective.scan_origin, dir))
+            || (hint_dir.is_none() && origin_matches(&scan_origin, dir))
         {
             opts.entrypoint.as_deref()
         } else {
             None
         };
-        projects.push(analyze_project(&fs, dir, workspace_lock, hint_entry));
+        projects.push(analyze_project(fs, dir, hint_entry));
     }
 
     let mut applications = python_applications(&projects);
@@ -226,9 +290,12 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
 
     ScanResult {
         schema_version: SCHEMA_VERSION,
-        root: root.to_string_lossy().to_string(),
-        upload_root: effective.upload_root,
-        scan_origin: effective.scan_origin,
+        root,
+        upload_root,
+        scan_origin,
+        status: "complete".to_string(),
+        completeness: "complete".to_string(),
+        file_requests: Vec::new(),
         workspace: ws_info,
         applications,
         diagnostics: all_diags,
@@ -434,6 +501,10 @@ fn merge_node_applications(applications: &mut Vec<Application>, discovery: &RawN
                     .package_manager
                     .as_ref()
                     .map(|manager| manager.name.clone()),
+                package_manager_version: package
+                    .package_manager
+                    .as_ref()
+                    .and_then(|manager| manager.version.clone()),
                 argv: safe_argv(command),
                 source: SourceRef {
                     path: package.manifest_path.clone(),
@@ -447,7 +518,6 @@ fn merge_node_applications(applications: &mut Vec<Application>, discovery: &RawN
                 &package.package_manager_candidates,
             ));
         }
-
         application
             .technologies
             .sort_by(|a, b| (&a.role, &a.kind, &a.name).cmp(&(&b.role, &b.kind, &b.name)));
@@ -565,31 +635,15 @@ fn node_dependency_set(package: &RawNodePackage) -> DependencySet {
             .package_manager
             .as_ref()
             .map(|manager| manager.name.clone()),
+        package_manager_version: package
+            .package_manager
+            .as_ref()
+            .and_then(|manager| manager.version.clone()),
         manifests: vec![ManifestRef {
             path: package.manifest_path.clone(),
             kind: "package-json".to_string(),
         }],
-        lockfiles: package
-            .lockfiles
-            .iter()
-            .map(|path| LockfileRef {
-                path: path.clone(),
-                kind: node_lockfile_kind(path).to_string(),
-                parsed: false,
-            })
-            .collect(),
         declared,
-        resolved: Vec::new(),
-    }
-}
-
-fn node_lockfile_kind(path: &str) -> &'static str {
-    match path.rsplit('/').next().unwrap_or(path) {
-        "package-lock.json" | "npm-shrinkwrap.json" => "npm",
-        "pnpm-lock.yaml" => "pnpm",
-        "yarn.lock" => "yarn",
-        "bun.lock" | "bun.lockb" => "bun",
-        _ => "node",
     }
 }
 
@@ -620,12 +674,7 @@ fn safe_argv(command: &str) -> Option<Vec<String>> {
 
 // ── per-project ────────────────────────────────────────────────────────────
 
-fn analyze_project(
-    fs: &FileSet,
-    dir: &str,
-    workspace_lock: bool,
-    entrypoint_hint: Option<&str>,
-) -> Project {
+fn analyze_project(fs: &FileSet, dir: &str, entrypoint_hint: Option<&str>) -> Project {
     let display_path = if dir.is_empty() {
         ".".to_string()
     } else {
@@ -640,10 +689,14 @@ fn analyze_project(
         match fs.read_str(pp_path).map(|s| manifest::parse_pyproject(&s)) {
             Some(Ok(pp)) => parsed = Some(pp),
             Some(Err(err)) => diagnostics.push(diag::kb201(pp_path, &err)),
-            None => diagnostics.push(diag::kb801(
+            None if !fs.is_pending(pp_path) => diagnostics.push(diag::kb801(
                 pp_path,
-                "pyproject.toml is unreadable, non-UTF-8, or exceeds the 2 MiB parse cap",
+                &format!(
+                    "pyproject.toml is unreadable, non-UTF-8, or exceeds the {}-byte parse cap",
+                    fs.max_file_bytes()
+                ),
             )),
+            None => {}
         }
     }
     let is_ws_root = parsed
@@ -685,19 +738,7 @@ fn analyze_project(
     }
     declared.sort_by(|a, b| (&a.name, &a.source.path).cmp(&(&b.name, &b.source.path)));
 
-    // Resolved Python dependencies from supported lockfiles.
-    let mut resolved: Vec<ResolvedDep> = Vec::new();
-    for lock in &files.lockfiles {
-        if lock.parsed {
-            if let Some(source) = fs.read_str(&lock.path) {
-                resolved.extend(manifest::parse_lock_resolved(
-                    &source, &lock.path, &lock.kind,
-                ));
-            }
-        }
-    }
-
-    // KB300 / KB305 / package manager + KB306
+    // KB300 / package manager + KB306
     let has_project_deps = parsed
         .as_ref()
         .and_then(|pp| pp.project.as_ref())
@@ -709,10 +750,6 @@ fn analyze_project(
         .any(|r| r.rsplit('/').next() == Some("requirements.txt"));
     if has_project_deps && has_root_requirements {
         diagnostics.push(diag::kb300(&display_path));
-    }
-    if files.lockfiles.len() > 1 {
-        let names: Vec<String> = files.lockfiles.iter().map(|l| l.path.clone()).collect();
-        diagnostics.push(diag::kb305(&display_path, &names));
     }
     let has_poetry_table = parsed
         .as_ref()
@@ -795,15 +832,8 @@ fn analyze_project(
     }
 
     // Evident-install-path rule: which FastAPI declarations install?
-    let has_lock = workspace_lock || files.lockfiles.iter().any(|l| l.kind == "uv");
     let installable = |group: &str| -> bool {
-        if has_lock {
-            group == "project" || group == "dev" || group == "group:dev"
-        } else {
-            // pyproject path installs only [project.dependencies]; the
-            // requirements path records its non-dev files as "project"
-            group == "project"
-        }
+        group == "project" || (package_manager == "uv" && matches!(group, "dev" | "group:dev"))
     };
     let fastapi_declared = !fastapi_groups.is_empty();
     let fastapi_installable = fastapi_groups.iter().any(|g| installable(g));
@@ -861,16 +891,27 @@ fn analyze_project(
         .and_then(|pp| pp.tool.as_ref())
         .and_then(|t| t.fastapi.as_ref())
         .and_then(|f| f.entrypoint.clone());
+    let should_resolve_entrypoint = !fs.is_virtual()
+        || fastapi_declared
+        || entrypoint_hint.is_some()
+        || tool_entrypoint.is_some();
+    if fastapi_declared {
+        fs.enable_script_hints();
+    }
 
     let mut resolution: Option<Resolution> = None;
-    if let Some(hint) = entrypoint_hint {
-        match entrypoint::validate_entrypoint(fs, dir, hint, "hint") {
-            Ok(res) => resolution = Some(res),
-            Err(diags) => diagnostics.extend(diags),
+    if should_resolve_entrypoint {
+        if let Some(hint) = entrypoint_hint {
+            allow_entrypoint_scripts(fs, dir, hint);
+            match entrypoint::validate_entrypoint(fs, dir, hint, "hint") {
+                Ok(res) => resolution = Some(res),
+                Err(diags) => diagnostics.extend(diags),
+            }
         }
     }
-    if resolution.is_none() {
+    if should_resolve_entrypoint && resolution.is_none() {
         if let Some(spec) = &tool_entrypoint {
+            allow_entrypoint_scripts(fs, dir, spec);
             match entrypoint::validate_entrypoint(fs, dir, spec, "tool-fastapi") {
                 Ok(res) => resolution = Some(res),
                 Err(diags) => diagnostics.extend(diags),
@@ -879,7 +920,7 @@ fn analyze_project(
     }
     let mut router_only = false;
     let mut import_seen = false;
-    if resolution.is_none() {
+    if should_resolve_entrypoint && resolution.is_none() {
         let scan = entrypoint::resolve_project(fs, dir);
         diagnostics.extend(scan.diagnostics);
         evidence.extend(scan.evidence);
@@ -977,10 +1018,9 @@ fn analyze_project(
         dependencies: Some(DependencySet {
             ecosystem: "python".to_string(),
             package_manager: (package_manager != "unknown").then(|| package_manager.to_string()),
+            package_manager_version: None,
             manifests: files.manifests,
-            lockfiles: files.lockfiles,
             declared,
-            resolved,
         }),
         env_vars: Vec::new(),
         python: PythonInfo {
@@ -992,20 +1032,42 @@ fn analyze_project(
     }
 }
 
+fn allow_entrypoint_scripts(fs: &FileSet, project_dir: &str, spec: &str) {
+    let Some((module, _)) = spec.split_once(':') else {
+        return;
+    };
+    let module_path = module.replace('.', "/");
+    for root in ["", "src"] {
+        let base = match (
+            project_dir.is_empty() || project_dir == ".",
+            root.is_empty(),
+        ) {
+            (true, true) => String::new(),
+            (true, false) => root.to_string(),
+            (false, true) => project_dir.to_string(),
+            (false, false) => format!("{project_dir}/{root}"),
+        };
+        let prefix = if base.is_empty() {
+            String::new()
+        } else {
+            format!("{base}/")
+        };
+        fs.allow_script(format!("{prefix}{module_path}.py"));
+        fs.allow_script(format!("{prefix}{module_path}/__init__.py"));
+    }
+}
+
 fn detect_package_manager(
     files: &manifest::ProjectFiles,
     has_poetry_table: bool,
     has_pdm_table: bool,
     build_backend: &str,
 ) -> &'static str {
-    let has_kind = |k: &str| files.lockfiles.iter().any(|l| l.kind == k);
-    if has_kind("uv") {
-        "uv"
-    } else if has_kind("poetry") || has_poetry_table || build_backend.starts_with("poetry") {
+    if has_poetry_table || build_backend.starts_with("poetry") {
         "poetry"
-    } else if has_kind("pdm") || has_pdm_table || build_backend.starts_with("pdm") {
+    } else if has_pdm_table || build_backend.starts_with("pdm") {
         "pdm"
-    } else if has_kind("pipenv") || files.manifests.iter().any(|m| m.kind == "pipfile") {
+    } else if files.manifests.iter().any(|m| m.kind == "pipfile") {
         "pipenv"
     } else if files.pyproject.is_some()
         || files

@@ -3,7 +3,7 @@
 use pyo3::prelude::*;
 use serde::Serialize;
 
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 3;
 
 #[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
@@ -82,15 +82,6 @@ pub struct DeclaredDep {
 
 #[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
-pub struct ResolvedDep {
-    pub name: String,
-    pub version: String,
-    pub source: String,
-    pub marker: Option<String>,
-}
-
-#[pyclass(get_all, frozen, skip_from_py_object)]
-#[derive(Clone, Debug, Serialize)]
 pub struct ManifestRef {
     pub path: String,
     pub kind: String,
@@ -98,21 +89,12 @@ pub struct ManifestRef {
 
 #[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
-pub struct LockfileRef {
-    pub path: String,
-    pub kind: String,
-    pub parsed: bool,
-}
-
-#[pyclass(get_all, frozen, skip_from_py_object)]
-#[derive(Clone, Debug, Serialize)]
 pub struct DependencySet {
     pub ecosystem: String,
     pub package_manager: Option<String>,
+    pub package_manager_version: Option<String>,
     pub manifests: Vec<ManifestRef>,
-    pub lockfiles: Vec<LockfileRef>,
     pub declared: Vec<DeclaredDep>,
-    pub resolved: Vec<ResolvedDep>,
 }
 
 #[pyclass(get_all, frozen, skip_from_py_object)]
@@ -131,6 +113,7 @@ pub struct BuildScript {
     pub name: String,
     pub command: String,
     pub package_manager: Option<String>,
+    pub package_manager_version: Option<String>,
     pub argv: Option<Vec<String>>,
     pub source: SourceRef,
 }
@@ -206,11 +189,22 @@ pub struct Workspace {
 
 #[pyclass(get_all, frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Serialize)]
+pub struct FileRequest {
+    pub path: String,
+    pub reason: String,
+    pub priority: u32,
+}
+
+#[pyclass(get_all, frozen, skip_from_py_object)]
+#[derive(Clone, Debug, Serialize)]
 pub struct ScanResult {
     pub schema_version: u32,
     pub root: String,
     pub upload_root: String,
     pub scan_origin: String,
+    pub status: String,
+    pub completeness: String,
+    pub file_requests: Vec<FileRequest>,
     pub workspace: Option<Workspace>,
     pub applications: Vec<Application>,
     pub diagnostics: Vec<Diagnostic>,

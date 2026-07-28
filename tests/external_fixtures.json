@@ -43,7 +43,7 @@
     "expected": {
       "applications": [{
         "application_dir": ".",
-        "technologies": ["framework:primary:nextjs:high", "language:supporting:typescript:high", "ui-framework:supporting:react:high"],
+        "technologies": ["framework:primary:nextjs:high", "language:supporting:javascript:high", "language:supporting:typescript:high", "ui-framework:supporting:react:high"],
         "dependency_managers": {"node": "npm"},
         "build_scripts": [["npm", "next build", ["next", "build"]]]
       }]
@@ -56,7 +56,7 @@
     "expected": {
       "applications": [{
         "application_dir": ".",
-        "technologies": ["framework:primary:astro:high", "language:supporting:typescript:high"],
+        "technologies": ["framework:primary:astro:high", "language:supporting:javascript:high", "language:supporting:typescript:high"],
         "dependency_managers": {"node": "npm"},
         "build_scripts": [["npm", "astro build", ["astro", "build"]]]
       }]
@@ -82,7 +82,7 @@
     "expected": {
       "applications": [{
         "application_dir": ".",
-        "technologies": ["build-tool:supporting:vite:high", "framework:primary:sveltekit:high", "language:supporting:typescript:high", "ui-framework:supporting:svelte:high"],
+        "technologies": ["build-tool:supporting:vite:high", "framework:primary:sveltekit:high", "language:supporting:javascript:high", "language:supporting:typescript:high", "ui-framework:supporting:svelte:high"],
         "dependency_managers": {"node": "npm"},
         "build_scripts": [["npm", "vite build", ["vite", "build"]]]
       }]
@@ -181,7 +181,7 @@
         },
         {
           "application_dir": "frontend",
-          "technologies": ["framework:primary:nextjs:high", "language:supporting:typescript:high", "ui-framework:supporting:react:high"],
+          "technologies": ["framework:primary:nextjs:high", "language:supporting:javascript:high", "language:supporting:typescript:high", "ui-framework:supporting:react:high"],
           "dependency_managers": {"node": "npm"},
           "build_scripts": [["npm", "next build", ["next", "build"]]]
         }
@@ -245,7 +245,7 @@
       "workspace": {"kind": "npm", "path": ".", "virtual_root": true, "members": [".", "apps/web", "packages/lib"]},
       "applications": [{
         "application_dir": "apps/web",
-        "technologies": ["framework:primary:nextjs:high", "language:supporting:typescript:high", "ui-framework:supporting:react:high"],
+        "technologies": ["framework:primary:nextjs:high", "language:supporting:javascript:high", "language:supporting:typescript:high", "ui-framework:supporting:react:high"],
         "dependency_managers": {"node": "npm"},
         "build_scripts": [["npm", "next build", ["next", "build"]]]
       }]
@@ -259,7 +259,7 @@
       "workspace": {"kind": "pnpm", "path": ".", "virtual_root": true, "members": [".", "apps/site", "packages/lib"]},
       "applications": [{
         "application_dir": "apps/site",
-        "technologies": ["framework:primary:astro:high", "language:supporting:typescript:high"],
+        "technologies": ["framework:primary:astro:high", "language:supporting:javascript:high", "language:supporting:typescript:high"],
         "dependency_managers": {"node": "pnpm"},
         "build_scripts": [["pnpm", "astro build", ["astro", "build"]]]
       }]
@@ -273,7 +273,7 @@
       "workspace": {"kind": "yarn", "path": ".", "virtual_root": true, "members": [".", "apps/web", "packages/lib"]},
       "applications": [{
         "application_dir": "apps/web",
-        "technologies": ["build-tool:supporting:vite:high", "framework:primary:sveltekit:high", "language:supporting:typescript:high", "ui-framework:supporting:svelte:high"],
+        "technologies": ["build-tool:supporting:vite:high", "framework:primary:sveltekit:high", "language:supporting:javascript:high", "language:supporting:typescript:high", "ui-framework:supporting:svelte:high"],
         "dependency_managers": {"node": "yarn"},
         "build_scripts": [["yarn", "vite build", ["vite", "build"]]]
       }]
@@ -301,7 +301,7 @@
     "expected": {
       "applications": [{
         "application_dir": ".",
-        "technologies": ["build-tool:supporting:vite:high", "framework:primary:fastapi:high", "integration:supporting:cross-inertia:high", "language:supporting:python:high", "language:supporting:typescript:high", "ui-framework:supporting:react:high"],
+        "technologies": ["build-tool:supporting:vite:high", "framework:primary:fastapi:high", "integration:supporting:cross-inertia:high", "language:supporting:javascript:high", "language:supporting:python:high", "language:supporting:typescript:high", "ui-framework:supporting:react:high"],
         "entrypoint": "main:app",
         "dependency_managers": {"node": "bun", "python": "uv"},
         "build_scripts": [["bun", "tsc && vite build", null]]

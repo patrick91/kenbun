@@ -1,11 +1,25 @@
 //! Deterministic filesystem indexing and bounded file reads.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Read;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Mutex;
+
+use ignore::Match;
+
+use crate::model::FileRequest;
 
 /// Per-file parse cap: larger files are skipped as unavailable.
 pub const MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
+const MAX_REQUESTS_PER_ROUND: usize = 64;
+const MAX_SCRIPT_REQUESTS_PER_ROUND: usize = 16;
+/// First line of a Git LFS pointer, per the LFS v1 spec.
+const LFS_POINTER_PREFIX: &[u8] = b"version https://git-lfs.github.com/spec/v1";
+
+fn is_lfs_pointer(bytes: &[u8]) -> bool {
+    bytes.starts_with(LFS_POINTER_PREFIX)
+}
 
 pub fn read_bounded_path(path: &Path) -> Option<String> {
     String::from_utf8(read_bounded_bytes(path)?).ok()
@@ -53,6 +67,30 @@ pub struct FileSet {
     /// Filesystem entries omitted from the scan, with a stable display path
     /// and the underlying reason.
     pub issues: Vec<FileIssue>,
+    /// Set when a read could not yield usable content. Tracked for both sources
+    /// so local and virtual scans report completeness the same way.
+    unavailable: AtomicBool,
+    source: FileSource,
+}
+
+enum FileSource {
+    Local,
+    Virtual(VirtualSource),
+}
+
+struct VirtualSource {
+    contents: BTreeMap<String, Option<Vec<u8>>>,
+    max_files: Option<u64>,
+    max_file_bytes: u64,
+    script_patterns: Vec<ScriptPattern>,
+    script_hints_enabled: AtomicBool,
+    allowed_scripts: Mutex<BTreeSet<String>>,
+    requests: Mutex<BTreeMap<String, FileRequest>>,
+}
+
+struct ScriptPattern {
+    basename_only: bool,
+    pattern: glob::Pattern,
 }
 
 pub struct FileIssue {
@@ -61,8 +99,31 @@ pub struct FileIssue {
 }
 
 impl FileSet {
+    #[cfg(test)]
+    pub(crate) fn test_local(root: PathBuf, files: BTreeMap<String, u64>) -> Self {
+        Self {
+            root,
+            files,
+            truncated: false,
+            issues: Vec::new(),
+            unavailable: AtomicBool::new(false),
+            source: FileSource::Local,
+        }
+    }
+
     pub fn contains(&self, rel: &str) -> bool {
         self.files.contains_key(rel)
+    }
+
+    pub fn is_virtual(&self) -> bool {
+        matches!(&self.source, FileSource::Virtual(_))
+    }
+
+    pub fn max_file_bytes(&self) -> u64 {
+        match &self.source {
+            FileSource::Local => MAX_FILE_BYTES,
+            FileSource::Virtual(source) => source.max_file_bytes,
+        }
     }
 
     /// Files directly or transitively under a directory (`""` = root).
@@ -97,15 +158,235 @@ impl FileSet {
     }
 
     pub fn read(&self, rel: &str) -> Option<Vec<u8>> {
-        let size = *self.files.get(rel)?;
-        if size > MAX_FILE_BYTES {
+        let bytes = self.read_source(rel)?;
+        // A pointer describes content that was never fetched. Its size is the
+        // pointer's, so it slips past every cap; parsing it as the real file
+        // invents facts about the repository.
+        if is_lfs_pointer(&bytes) {
+            self.mark_unavailable();
             return None;
         }
-        read_bounded_bytes(&self.root.join(rel))
+        Some(bytes)
+    }
+
+    fn read_source(&self, rel: &str) -> Option<Vec<u8>> {
+        let size = *self.files.get(rel)?;
+        let max_file_bytes = match &self.source {
+            FileSource::Local => MAX_FILE_BYTES,
+            FileSource::Virtual(source) => source.max_file_bytes,
+        };
+        if size > max_file_bytes {
+            self.mark_unavailable();
+            return None;
+        }
+        match &self.source {
+            FileSource::Local => {
+                let bytes = read_bounded_bytes(&self.root.join(rel));
+                if bytes.is_none() {
+                    self.mark_unavailable();
+                }
+                bytes
+            }
+            FileSource::Virtual(source) => match source.contents.get(rel) {
+                Some(Some(bytes)) if bytes.len() as u64 <= source.max_file_bytes => {
+                    Some(bytes.clone())
+                }
+                Some(_) => {
+                    self.mark_unavailable();
+                    None
+                }
+                None => {
+                    let explicitly_allowed = source
+                        .allowed_scripts
+                        .lock()
+                        .expect("lock poisoned")
+                        .contains(rel);
+                    let hint_allowed = source.script_hints_enabled.load(Ordering::Relaxed)
+                        && source
+                            .script_patterns
+                            .iter()
+                            .any(|pattern| pattern.matches(rel));
+                    if is_script(rel)
+                        && !is_manifest_or_config_script(rel)
+                        && !explicitly_allowed
+                        && !hint_allowed
+                    {
+                        return None;
+                    }
+                    source
+                        .requests
+                        .lock()
+                        .expect("lock poisoned")
+                        .entry(rel.to_string())
+                        .or_insert_with(|| {
+                            let (reason, priority) = request_kind(rel);
+                            FileRequest {
+                                path: rel.to_string(),
+                                reason: reason.to_string(),
+                                priority,
+                            }
+                        });
+                    None
+                }
+            },
+        }
     }
 
     pub fn read_str(&self, rel: &str) -> Option<String> {
-        String::from_utf8(self.read(rel)?).ok()
+        match String::from_utf8(self.read(rel)?) {
+            Ok(source) => Some(source),
+            Err(_) => {
+                self.mark_unavailable();
+                None
+            }
+        }
+    }
+
+    pub fn allow_script(&self, rel: String) {
+        if let FileSource::Virtual(source) = &self.source {
+            source
+                .allowed_scripts
+                .lock()
+                .expect("lock poisoned")
+                .insert(rel);
+        }
+    }
+
+    pub fn enable_script_hints(&self) {
+        if let FileSource::Virtual(source) = &self.source {
+            source.script_hints_enabled.store(true, Ordering::Relaxed);
+        }
+    }
+
+    pub fn hinted_scripts(&self, dir: &str) -> Vec<String> {
+        let FileSource::Virtual(source) = &self.source else {
+            return Vec::new();
+        };
+        if !source.script_hints_enabled.load(Ordering::Relaxed) {
+            return Vec::new();
+        }
+        let prefix = if dir.is_empty() || dir == "." {
+            String::new()
+        } else {
+            format!("{dir}/")
+        };
+        let mut seen = BTreeSet::new();
+        let mut scripts = Vec::new();
+        for pattern in &source.script_patterns {
+            for path in self.files.keys() {
+                if !path.starts_with(&prefix)
+                    || !is_script(path)
+                    || !pattern.matches(path)
+                    || !seen.insert(path.clone())
+                {
+                    continue;
+                }
+                scripts.push(path.clone());
+            }
+        }
+        scripts
+    }
+
+    pub fn is_pending(&self, rel: &str) -> bool {
+        matches!(&self.source, FileSource::Virtual(source) if source.requests.lock().expect("lock poisoned").contains_key(rel))
+    }
+
+    pub fn unavailable_seen(&self) -> bool {
+        self.unavailable.load(Ordering::Relaxed)
+            || matches!(&self.source, FileSource::Local) && !self.issues.is_empty()
+    }
+
+    pub fn requests(&self) -> Vec<FileRequest> {
+        let FileSource::Virtual(source) = &self.source else {
+            return Vec::new();
+        };
+        let requests = source.requests.lock().expect("lock poisoned");
+        let Some(priority) = requests.values().map(|request| request.priority).min() else {
+            return Vec::new();
+        };
+        let round_limit = if priority >= 40 {
+            MAX_SCRIPT_REQUESTS_PER_ROUND
+        } else {
+            MAX_REQUESTS_PER_ROUND
+        };
+        let remaining_files = source
+            .max_files
+            .map(|limit| limit.saturating_sub(source.contents.len() as u64))
+            .unwrap_or(u64::MAX);
+        if remaining_files == 0 {
+            self.mark_unavailable();
+            return Vec::new();
+        }
+        let request_limit = round_limit.min(usize::try_from(remaining_files).unwrap_or(usize::MAX));
+        requests
+            .values()
+            .filter(|request| request.priority == priority)
+            .take(request_limit)
+            .cloned()
+            .collect()
+    }
+
+    pub fn has_ignore_requests(&self) -> bool {
+        matches!(&self.source, FileSource::Virtual(source) if source.requests.lock().expect("lock poisoned").values().any(|request| request.priority == 0))
+    }
+
+    fn mark_unavailable(&self) {
+        self.unavailable.store(true, Ordering::Relaxed);
+    }
+}
+
+impl ScriptPattern {
+    fn matches(&self, rel: &str) -> bool {
+        let candidate = if self.basename_only {
+            rel.rsplit('/').next().unwrap_or(rel)
+        } else {
+            rel
+        };
+        self.pattern.matches_with(
+            candidate,
+            glob::MatchOptions {
+                require_literal_separator: true,
+                ..glob::MatchOptions::default()
+            },
+        )
+    }
+}
+
+fn is_script(path: &str) -> bool {
+    matches!(
+        path.rsplit('.').next(),
+        Some("py" | "pyw" | "js" | "jsx" | "ts" | "tsx" | "mjs" | "cjs" | "mts" | "cts")
+    )
+}
+
+fn is_manifest_or_config_script(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    matches!(name, "setup.py" | "manage.py") || name.contains(".config.")
+}
+
+fn request_kind(path: &str) -> (&'static str, u32) {
+    let name = path.rsplit('/').next().unwrap_or(path);
+    if name == ".gitignore" {
+        ("ignore rules", 0)
+    } else if name == "pyproject.toml"
+        || name == "package.json"
+        || name == "Pipfile"
+        || name == "setup.py"
+        || name == "setup.cfg"
+        || name == "pnpm-workspace.yaml"
+        || (name.starts_with("requirements") && name.ends_with(".txt"))
+        || (path.contains("/requirements/") && name.ends_with(".txt"))
+    {
+        ("application manifest", 10)
+    } else if matches!(
+        name,
+        ".python-version" | ".node-version" | ".nvmrc" | ".tool-versions"
+    ) {
+        ("runtime metadata", 20)
+    } else if is_script(path) {
+        ("script discovery hint", 40)
+    } else {
+        ("application configuration", 30)
     }
 }
 
@@ -122,6 +403,207 @@ fn is_excluded_dir(path: &Path) -> bool {
     false
 }
 
+pub fn virtual_files(
+    entries: Vec<(String, u64)>,
+    contents: BTreeMap<String, Option<Vec<u8>>>,
+    script_patterns: Vec<String>,
+    max_files: Option<u64>,
+    max_file_bytes: u64,
+) -> Result<FileSet, String> {
+    let mut all_entries = BTreeMap::new();
+    for (path, size) in entries {
+        validate_relative_path(&path)?;
+        if all_entries.insert(path.clone(), size).is_some() {
+            return Err(format!("duplicate file inventory path: {path}"));
+        }
+    }
+    for path in contents.keys() {
+        validate_relative_path(path)?;
+        if !all_entries.contains_key(path) {
+            return Err(format!(
+                "content path is not present in the inventory: {path}"
+            ));
+        }
+    }
+
+    let mut compiled_patterns = Vec::new();
+    let mut seen_patterns = BTreeSet::new();
+    for raw in script_patterns {
+        if raw.is_empty()
+            || raw.starts_with('/')
+            || raw.contains('\\')
+            || raw.split('/').any(|part| matches!(part, "." | ".."))
+        {
+            return Err(format!("invalid script pattern: {raw}"));
+        }
+        if !seen_patterns.insert(raw.clone()) {
+            continue;
+        }
+        let pattern = glob::Pattern::new(&raw)
+            .map_err(|error| format!("invalid script pattern {raw:?}: {error}"))?;
+        compiled_patterns.push(ScriptPattern {
+            basename_only: !raw.contains('/'),
+            pattern,
+        });
+    }
+
+    let mut issues = Vec::new();
+    let mut requests = BTreeMap::new();
+    let mut ignore_matchers = Vec::new();
+    let mut unavailable_seen = false;
+    for path in all_entries
+        .keys()
+        .filter(|path| path.rsplit('/').next() == Some(".gitignore"))
+    {
+        if all_entries[path] > max_file_bytes {
+            unavailable_seen = true;
+            continue;
+        }
+        match contents.get(path) {
+            None => {
+                requests.insert(
+                    path.clone(),
+                    FileRequest {
+                        path: path.clone(),
+                        reason: "ignore rules".to_string(),
+                        priority: 0,
+                    },
+                );
+            }
+            Some(None) => unavailable_seen = true,
+            Some(Some(bytes)) if bytes.len() as u64 > max_file_bytes => {
+                unavailable_seen = true;
+            }
+            Some(Some(bytes)) if is_lfs_pointer(bytes) => {
+                unavailable_seen = true;
+                issues.push(FileIssue {
+                    path: path.clone(),
+                    message: "Git LFS pointer does not contain the file content".to_string(),
+                });
+            }
+            Some(Some(bytes)) => match std::str::from_utf8(bytes) {
+                Ok(source) => {
+                    let dir = path.rsplit_once('/').map(|(dir, _)| dir).unwrap_or("");
+                    let root = if dir.is_empty() { "." } else { dir };
+                    let mut builder = ignore::gitignore::GitignoreBuilder::new(root);
+                    let mut valid = true;
+                    for (line_number, line) in source.lines().enumerate() {
+                        if let Err(error) = builder.add_line(Some(PathBuf::from(path)), line) {
+                            valid = false;
+                            issues.push(FileIssue {
+                                path: path.clone(),
+                                message: format!(
+                                    "invalid ignore rule on line {}: {error}",
+                                    line_number + 1
+                                ),
+                            });
+                        }
+                    }
+                    match builder.build() {
+                        Ok(matcher) => ignore_matchers.push((dir.to_string(), matcher)),
+                        Err(error) => {
+                            valid = false;
+                            issues.push(FileIssue {
+                                path: path.clone(),
+                                message: format!("invalid ignore rules: {error}"),
+                            });
+                        }
+                    }
+                    unavailable_seen |= !valid;
+                }
+                Err(_) => {
+                    unavailable_seen = true;
+                    issues.push(FileIssue {
+                        path: path.clone(),
+                        message: "ignore file is not valid UTF-8".to_string(),
+                    });
+                }
+            },
+        }
+    }
+    ignore_matchers.sort_by(|a, b| {
+        a.0.matches('/')
+            .count()
+            .cmp(&b.0.matches('/').count())
+            .then(a.0.cmp(&b.0))
+    });
+
+    let all_paths: BTreeSet<String> = all_entries.keys().cloned().collect();
+    let files = all_entries
+        .into_iter()
+        .filter(|(path, _)| {
+            !is_builtin_excluded(path, &all_paths) && !is_ignored(path, &ignore_matchers)
+        })
+        .collect();
+
+    Ok(FileSet {
+        root: PathBuf::from("."),
+        files,
+        truncated: false,
+        issues,
+        unavailable: AtomicBool::new(unavailable_seen),
+        source: FileSource::Virtual(VirtualSource {
+            contents,
+            max_files,
+            max_file_bytes,
+            script_patterns: compiled_patterns,
+            script_hints_enabled: AtomicBool::new(false),
+            allowed_scripts: Mutex::new(BTreeSet::new()),
+            requests: Mutex::new(requests),
+        }),
+    })
+}
+
+fn validate_relative_path(path: &str) -> Result<(), String> {
+    if path.is_empty()
+        || path.starts_with('/')
+        || path.contains('\\')
+        || path
+            .split('/')
+            .any(|part| part.is_empty() || matches!(part, "." | ".."))
+    {
+        return Err(format!(
+            "file paths must be normalized repository-relative POSIX paths: {path:?}"
+        ));
+    }
+    Ok(())
+}
+
+fn is_builtin_excluded(path: &str, all_paths: &BTreeSet<String>) -> bool {
+    let parts: Vec<&str> = path.split('/').collect();
+    for index in 0..parts.len().saturating_sub(1) {
+        let name = parts[index];
+        if UNCONDITIONAL_EXCLUDES.contains(&name) || name.ends_with(".egg-info") {
+            return true;
+        }
+        if CONDITIONAL_EXCLUDES.contains(&name) {
+            let dir = parts[..=index].join("/");
+            if VENV_BUILD_MARKERS
+                .iter()
+                .any(|marker| all_paths.contains(&format!("{dir}/{marker}")))
+            {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+fn is_ignored(path: &str, matchers: &[(String, ignore::gitignore::Gitignore)]) -> bool {
+    let mut ignored = false;
+    for (dir, matcher) in matchers {
+        if !dir.is_empty() && path != dir && !path.starts_with(&format!("{dir}/")) {
+            continue;
+        }
+        match matcher.matched_path_or_any_parents(path, false) {
+            Match::Ignore(_) => ignored = true,
+            Match::Whitelist(_) => ignored = false,
+            Match::None => {}
+        }
+    }
+    ignored
+}
+
 /// Walk `root`, honoring .gitignore plus any `extra_ignore_files` (e.g.
 /// `.fastapicloudignore` — same syntax as .gitignore, any depth, higher
 /// precedence), applying built-in exclusions. Serial and byte-ordered so
@@ -135,6 +617,7 @@ pub fn walk_fs(
     let mut files = BTreeMap::new();
     let mut truncated = false;
     let mut issues = Vec::new();
+    let mut unavailable_seen = false;
 
     if !root.is_dir() {
         issues.push(FileIssue {
@@ -146,6 +629,8 @@ pub fn walk_fs(
             files,
             truncated,
             issues,
+            unavailable: AtomicBool::new(false),
+            source: FileSource::Local,
         };
     }
     let canonical_root = std::fs::canonicalize(root).ok();
@@ -235,6 +720,15 @@ pub fn walk_fs(
                 continue;
             }
         };
+        if rel_str.rsplit('/').next() == Some(".gitignore")
+            && read_bounded_bytes(entry.path()).is_some_and(|bytes| is_lfs_pointer(&bytes))
+        {
+            unavailable_seen = true;
+            issues.push(FileIssue {
+                path: rel_str.clone(),
+                message: "Git LFS pointer does not contain the file content".to_string(),
+            });
+        }
         files.insert(rel_str, size);
     }
 
@@ -243,6 +737,8 @@ pub fn walk_fs(
         files,
         truncated,
         issues,
+        unavailable: AtomicBool::new(unavailable_seen),
+        source: FileSource::Local,
     }
 }
 

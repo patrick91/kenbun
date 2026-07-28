@@ -21,7 +21,6 @@ import kenbun
 result = kenbun.scan(
     Path("."),
     application_dir=None,  # optional repository-relative hint
-    entrypoint=None,       # optional FastAPI "module:attribute" hint
 )
 
 for application in result.applications:
@@ -36,11 +35,38 @@ for application in result.applications:
 print(result.to_json())
 ```
 
-`scan()` currently accepts a real directory only. It walks the repository,
-honors built-in and caller-provided ignore rules, discovers supported
-workspaces, and returns `ScanResult` with `schema_version == 1`. Results are
-deterministically ordered and available as typed PyO3 objects or canonical
-JSON.
+For remote repositories, pass the repository-relative paths and feed requested
+contents into a stateful analysis:
+
+```python
+files: list[kenbun.FileEntry] = [
+    kenbun.FileEntry(path="pyproject.toml", size=128),
+    kenbun.FileEntry(path="app.py", size=512),
+]
+analysis = kenbun.remote_analysis(
+    files,
+    inventory_complete=True,
+    hints={"script_patterns": ["main.py", "app.py", "api.py"]},
+    max_files=256,
+    max_file_bytes=256 * 1024,
+)
+
+while file_requests := analysis.file_requests:
+    contents = fetch_files(file_requests)
+    analysis.update(contents)
+
+result = analysis.result
+```
+
+Each `FileEntry` contains a path and its repository-reported size, or `None`
+when the size is unknown. Kenbun does not request entries known to exceed
+`max_file_bytes` and still validates the actual content supplied to `update()`.
+Each `FileRequest` contains a path, reason, and priority. `max_files` bounds
+requested file contents across every analysis round. The caller owns remaining
+transport-specific metadata and returns `bytes` or `None` for every requested
+path. `scan()` walks a real directory; `analyze()` remains the pure, stateless
+primitive beneath `remote_analysis()`. Both analysis modes produce schema v3
+`ScanResult` objects with deterministic ordering and canonical JSON.
 
 ## Supported detection
 
@@ -74,18 +100,20 @@ kept separate and must independently qualify as an application.
 
 ## Output model
 
-- `ScanResult` contains the scan paths, optional `Workspace`, ordered
-  `applications`, and aggregate diagnostics.
+- `ScanResult` contains protocol status/completeness, ordered `file_requests`,
+  scan paths, optional `Workspace`, ordered `applications`, and diagnostics.
 - `Application` contains `technologies`, optional entrypoint, one or more
   ecosystem-specific `DependencySet` values, explicit `build_scripts`, Python
   and Node runtime metadata, evidence, and local diagnostics.
+- `DependencySet` and `BuildScript` report an inferred package-manager name
+  and, when `package.json#packageManager` supplies one, its declared version.
 - `Technology` has a normalized name, kind (`language`, `framework`,
   `ui-framework`, `integration`, or `build-tool`), role (`primary` or
   `supporting`), confidence, and evidence.
 - `BuildScript` records the explicit `build` script as data: the raw command,
-  optional safely parsed argv, optional inferred package manager, and source.
+  optional safely parsed argv, optional package-manager facts, and source.
 
-See the [v1 specification](docs/spec.md) for the normative model and detection
+See the [v3 specification](docs/spec.md) for the normative model and detection
 rules.
 
 ## External fixture corpus

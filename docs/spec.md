@@ -1,6 +1,6 @@
-# Kenbun specification (schema v1)
+# Kenbun specification (schema v3)
 
-This document defines the public schema and detection behavior for Kenbun v1.
+This document defines the public schema and detection behavior for Kenbun v3.
 Kenbun is a static repository analyzer implemented in Rust with typed Python
 bindings. It discovers applications and reports evidence; it does not make
 deployment decisions.
@@ -23,7 +23,9 @@ The words **must**, **must not**, **should**, and **may** are normative.
   that an application is supported or deployable. There is no `recommended`,
   `selected`, or generated runtime-command field.
 
-## 2. Filesystem API
+## 2. Analysis APIs
+
+### Local filesystem
 
 ```python
 def scan(
@@ -37,7 +39,8 @@ def scan(
 ) -> ScanResult: ...
 ```
 
-`root` must identify a real directory. Schema v1 has no virtual-file API.
+`root` must identify a real directory. Local scans satisfy reads immediately
+and therefore return `status="complete"` with no `file_requests`.
 
 `application_dir` is an optional path relative to the caller-supplied scan root.
 Kenbun translates it into the effective workspace root, validates that it
@@ -62,18 +65,91 @@ If the supplied root is inside a recognized workspace, Kenbun may discover the
 workspace root upward. `root` remains the caller's original path;
 `upload_root` and `scan_origin` describe that path relationship.
 
+### Remote and incremental input
+
+```python
+class AnalysisHints(TypedDict, total=False):
+    script_patterns: list[str]
+
+class FileEntry(TypedDict):
+    path: str
+    size: int | None
+
+def remote_analysis(
+    files: Iterable[FileEntry],
+    *,
+    inventory_complete: bool = True,
+    hints: AnalysisHints | None = None,
+    max_rounds: int = 20,
+    max_files: int | None = None,
+    max_file_bytes: int = 2 * 1024 * 1024,
+) -> RemoteAnalysis: ...
+
+def analyze(
+    files: Iterable[FileEntry],
+    contents: Mapping[str, bytes | None] | None = None,
+    *,
+    inventory_complete: bool = True,
+    hints: AnalysisHints | None = None,
+    max_files: int | None = None,
+    max_file_bytes: int = 2 * 1024 * 1024,
+) -> ScanResult: ...
+```
+
+`files` contains normalized repository-relative POSIX paths and optional
+repository-reported sizes. Kenbun treats entries known to exceed
+`max_file_bytes` as unavailable without requesting their contents. Unknown
+sizes remain requestable. Transport metadata such as blob identifiers belongs
+to the caller. A path omitted from `contents` has not been fetched. `None`
+means the caller cannot provide the content and prevents that path from being
+requested again. `max_files` bounds how many missing file contents can be
+requested; entries already present in `contents` consume that budget. Once
+exhausted, later reads are treated as unavailable. `max_file_bytes` configures
+the per-file parse cap used by both the stateless primitive and remote session.
+Oversized stateless contents are treated as unavailable.
+
+`remote_analysis()` creates a stateful analysis over that inventory. Its
+`file_requests` property contains the current ordered `list[FileRequest]`.
+`update()` requires one `bytes | None` response for every request, rejects
+oversized contents using their actual length, accumulates the response, and
+advances the analysis. `result` is available only after completion. The session
+owns file and round limits, progress validation, and the accumulated contents.
+
+`analyze()` is pure and stateless. A caller repeats the call with accumulated
+contents until `status="complete"`. Every unresolved path is requested at
+most once per input state, and `status="needs_files"` always has non-empty
+`file_requests`. Ignore rules and manifests are requested before scripts.
+
+`inventory_complete=False` states that paths may be missing from the supplied
+inventory, for example after a truncated remote tree response. Such an input
+cannot produce a definitive negative and therefore has
+`completeness="partial"`.
+
+`hints["script_patterns"]` provides ordered positive glob hints for
+speculative source discovery. Basename patterns such as `app.py` match at any
+depth; path patterns support `*`, `?`, and `**`. Empty hints perform a
+manifest/config-only pass. On remote input, speculative Python scripts are only
+requested after a manifest declares a supported framework; an inventory with no
+Python dependency evidence therefore completes without fetching Python source.
+Scripts explicitly referenced by repository configuration remain eligible
+without a hint. Invalid or unknown hints raise `ValueError`.
+
 ## 3. Public output model
 
-All public records are frozen PyO3 classes and have corresponding type stubs.
+All public output records are frozen PyO3 classes and have corresponding type
+stubs.
 `ScanResult.to_json()` emits compact schema-versioned JSON in declaration
 order.
 
 ```text
 ScanResult
-├─ schema_version: int                    # exactly 1
+├─ schema_version: int                    # exactly 3
 ├─ root: str                              # path supplied to scan()
 ├─ upload_root: str                       # "." or path from root to workspace root
 ├─ scan_origin: str                       # root relative to upload root
+├─ status: "needs_files" | "complete"
+├─ completeness: "complete" | "partial"
+├─ file_requests: list[FileRequest]
 ├─ workspace: Workspace | None
 ├─ applications: list[Application]        # sorted by application_dir
 └─ diagnostics: list[Diagnostic]          # aggregate, deduplicated, stable order
@@ -102,15 +178,15 @@ Technology
 DependencySet
 ├─ ecosystem: "python" | "node"
 ├─ package_manager: str | None
+├─ package_manager_version: str | None
 ├─ manifests: list[ManifestRef]
-├─ lockfiles: list[LockfileRef]
-├─ declared: list[DeclaredDep]
-└─ resolved: list[ResolvedDep]
+└─ declared: list[DeclaredDep]
 
 BuildScript
-├─ name: str                              # v1 emits only "build"
+├─ name: str                              # v3 emits only "build"
 ├─ command: str                           # exact package.json script value
 ├─ package_manager: str | None
+├─ package_manager_version: str | None
 ├─ argv: list[str] | None                 # only when safely representable
 └─ source: SourceRef
 
@@ -119,6 +195,11 @@ Workspace
 ├─ path: str
 ├─ virtual_root: bool
 └─ members: list[str]
+
+FileRequest
+├─ path: str
+├─ reason: str
+└─ priority: int
 ```
 
 An `Application` may have both Python and Node dependency sets. `python` and
@@ -127,7 +208,7 @@ pins come from the nearest `.python-version` and relevant `.tool-versions`
 entry. Node pins come from the nearest `.node-version`, `.nvmrc`, and relevant
 `.tool-versions` entry; `package.json#engines.node` is retained as the Node
 runtime constraint. `entrypoint` is optional because
-only FastAPI has detailed entrypoint resolution in v1 and because a framework
+only FastAPI has detailed entrypoint resolution in v3 and because a framework
 can be detected even when its entrypoint is unresolved.
 
 `Evidence` records a kind, path, optional span, and human-readable detail.
@@ -161,7 +242,7 @@ with supporting Node/Vite facts, while independently qualified `backend/` and
 ## 5. Python detection
 
 Python dependency evidence is read from supported `pyproject.toml` tables,
-requirements files, Pipfile, and recognized lockfiles. Dependency names are
+requirements files, and Pipfile. Dependency names are
 PEP 503 normalized. Poetry and PDM metadata is parsed as data; `setup.py` may
 be string-scanned for weak evidence but is never executed.
 
@@ -198,12 +279,12 @@ cap confidence and emit diagnostics. A declared FastAPI dependency with no
 resolved object still produces the application with `entrypoint=None` and
 `KB103`.
 
-Django and Flask do not receive inferred `Entrypoint` values in v1.
+Django and Flask do not receive inferred `Entrypoint` values in v3.
 
 ## 6. Node detection
 
-Node evidence is read from `package.json`, workspace manifests, and supported
-lockfiles. Only declarative dependency and script data is used.
+Node evidence is read from `package.json` and workspace manifests. Only
+declarative dependency and script data is used.
 
 | Direct package signal | Normalized technology | Usual supporting facts |
 |---|---|---|
@@ -259,7 +340,7 @@ Kenbun recognizes:
 
 - uv workspaces from `[tool.uv.workspace]`.
 - npm, Yarn, and Bun workspaces from `package.json` workspace declarations,
-  disambiguated by explicit manager or lockfile evidence.
+  using an explicit `packageManager` when present.
 - pnpm workspaces from `pnpm-workspace.yaml`.
 
 Members are expanded deterministically and recorded in `Workspace.members`.
@@ -271,25 +352,31 @@ workspace upward and report all independently qualified member applications.
 when a Node workspace is valid but its manager is ambiguous or unknown, and
 `mixed` when the same root declares both uv and Node workspaces.
 Manager-specific facts remain optional on `DependencySet` and `BuildScript`.
+When an explicit `packageManager` contains a version, Kenbun exposes it as
+`package_manager_version`; path-based inference has no version.
 
 Node package-manager inference uses this precedence:
 
 1. The nearest `package.json` with an explicit `packageManager`, walking from
    the application directory toward the effective root.
-2. Otherwise, the nearest directory with lockfile or workspace evidence, but
-   only when exactly one of npm, pnpm, Yarn, or Bun is represented.
+2. Otherwise, the nearest directory with exactly one manager signal:
+   `package-lock.json` or `npm-shrinkwrap.json` for npm, `pnpm-lock.yaml` or
+   `pnpm-workspace.yaml` for pnpm, `yarn.lock` for Yarn, and `bun.lock` or
+   `bun.lockb` for Bun.
 
-Conflicting evidence produces no inferred manager and a diagnostic. Kenbun
-must not default to npm merely because `package.json` exists.
+Lockfile contents are never requested or parsed; only their inventory paths are
+used as manager evidence. Conflicting signals at the same nearest directory
+leave the manager unknown and emit `KB308`. Kenbun must not default to npm
+merely because `package.json` exists.
 
 ## 8. Build scripts
 
-For a Node dependency set, v1 records only an explicitly declared
+For a Node dependency set, v3 records only an explicitly declared
 `scripts.build`. `BuildScript.command` preserves the raw string. `argv` is set
 only for a simple command that can be represented safely without interpreting
 shell control syntax; commands such as `tsc && vite build` keep their raw form
-and use `argv=None`. `package_manager` follows the inference rules above and
-may be `None`.
+and use `argv=None`. Package-manager name and version follow the inference
+rules above and may be `None`.
 
 The script is a repository fact, not a recommendation. Kenbun never executes
 it and does not choose whether a consumer should run it.
@@ -302,7 +389,7 @@ presentation facts. Application diagnostics are also aggregated onto
 
 - discovery: `KB100`, `KB101`, `KB102`, `KB103`, `KB104`, `KB111`, `KB112`;
 - parsing: `KB200`, `KB201`, `KB202`, `KB203`;
-- dependency consistency: `KB300`, `KB301`, `KB305`, `KB306`, `KB307`, `KB308`;
+- dependency consistency: `KB300`, `KB301`, `KB306`, `KB307`, `KB308`;
 - workspaces: `KB400`, `KB401`, `KB402`;
 - hints: `KB500`, `KB501`, `KB502`, `KB503`, `KB504`, `KB505`;
 - version conflicts: `KB700`;
@@ -332,10 +419,9 @@ or executing fixture code. It must never follow a mutable default branch.
 
 ## 11. Deferred capabilities
 
-The following are intentionally outside schema v1:
+The following are intentionally outside schema v3:
 
 - PHP and Laravel application detection.
-- A virtual `analyze()` API or incremental `want_files` protocol.
 - Runtime/build command selection, application recommendation, deployability,
   or platform support policy.
 - Generic Inertia detection for stacks other than the same-root Cross Inertia

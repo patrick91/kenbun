@@ -5,7 +5,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use serde::Deserialize;
 
 use crate::fileset::FileSet;
-use crate::model::{DeclaredDep, LockfileRef, ManifestRef, ResolvedDep, SourceRef};
+use crate::model::{DeclaredDep, ManifestRef, SourceRef};
 use crate::norm::{normalize_name, split_requirement};
 
 // ── pyproject.toml ─────────────────────────────────────────────────────────
@@ -298,43 +298,6 @@ fn normalize_rel(path: &str) -> String {
     parts.join("/")
 }
 
-// ── lockfiles ──────────────────────────────────────────────────────────────
-
-/// uv.lock / pylock.toml resolved packages: `[[package]]` name and version.
-pub fn parse_lock_resolved(source: &str, lock_rel: &str, kind: &str) -> Vec<ResolvedDep> {
-    let Ok(value) = source.parse::<toml::Table>() else {
-        return Vec::new();
-    };
-    let key = if kind == "pylock" {
-        "packages"
-    } else {
-        "package"
-    };
-    let Some(toml::Value::Array(packages)) = value.get(key) else {
-        return Vec::new();
-    };
-    let mut out: Vec<ResolvedDep> = packages
-        .iter()
-        .filter_map(|p| {
-            let name = p.get("name")?.as_str()?;
-            let version = p.get("version").and_then(|v| v.as_str()).unwrap_or("");
-            Some(ResolvedDep {
-                name: normalize_name(name),
-                version: version.to_string(),
-                source: lock_rel.to_string(),
-                marker: p
-                    .get("resolution-markers")
-                    .and_then(|m| m.as_array())
-                    .and_then(|a| a.first())
-                    .and_then(|v| v.as_str())
-                    .map(str::to_string),
-            })
-        })
-        .collect();
-    out.sort_by(|a, b| (&a.name, &a.version).cmp(&(&b.name, &b.version)));
-    out
-}
-
 /// Pipfile `[packages]` and `[dev-packages]` entries.
 pub fn pipfile_deps(source: &str, path: &str) -> Vec<DeclaredDep> {
     let Ok(value) = source.parse::<toml::Table>() else {
@@ -406,18 +369,11 @@ pub fn inline_script_deps(source: &str, path: &str) -> (Vec<DeclaredDep>, Option
     (dependencies, requires_python)
 }
 
-/// Names recorded in uv.lock (for the conservative KB302 check and Layer 1).
-#[allow(dead_code)] // M2: KB302 drift check
-pub fn lock_package_names(resolved: &[ResolvedDep]) -> std::collections::BTreeSet<String> {
-    resolved.iter().map(|r| r.name.clone()).collect()
-}
-
-// ── manifest/lockfile discovery per project dir ────────────────────────────
+// ── manifest discovery per project dir ────────────────────────────────────
 
 pub struct ProjectFiles {
     pub pyproject: Option<String>,
     pub manifests: Vec<ManifestRef>,
-    pub lockfiles: Vec<LockfileRef>,
     pub requirements: Vec<String>,
     pub inline_scripts: Vec<String>,
 }
@@ -431,7 +387,6 @@ pub fn project_files(fs: &FileSet, dir: &str) -> ProjectFiles {
         }
     };
     let mut manifests = Vec::new();
-    let mut lockfiles = Vec::new();
     let mut requirements = Vec::new();
     let mut pyproject = None;
     let mut inline_scripts = Vec::new();
@@ -497,29 +452,12 @@ pub fn project_files(fs: &FileSet, dir: &str) -> ProjectFiles {
             inline_scripts.push(path.to_string());
         }
     }
-    for (file, kind) in [
-        ("uv.lock", "uv"),
-        ("pylock.toml", "pylock"),
-        ("poetry.lock", "poetry"),
-        ("pdm.lock", "pdm"),
-        ("Pipfile.lock", "pipenv"),
-    ] {
-        let p = join(file);
-        if fs.contains(&p) {
-            lockfiles.push(LockfileRef {
-                path: p,
-                kind: kind.into(),
-                parsed: matches!(kind, "uv" | "pylock"),
-            });
-        }
-    }
     manifests.sort_by(|a, b| a.path.cmp(&b.path));
     requirements.sort();
 
     ProjectFiles {
         pyproject,
         manifests,
-        lockfiles,
         requirements,
         inline_scripts,
     }

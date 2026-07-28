@@ -1,5 +1,8 @@
+from collections.abc import Iterable, Mapping
 from os import PathLike
 from typing import Literal
+
+from kenbun._types import AnalysisHints, FileEntry
 
 class Span:
     start_line: int
@@ -55,28 +58,16 @@ class DeclaredDep:
     group: str
     source: SourceRef
 
-class ResolvedDep:
-    name: str
-    version: str
-    source: str
-    marker: str | None
-
 class ManifestRef:
     path: str
     kind: str
 
-class LockfileRef:
-    path: str
-    kind: str
-    parsed: bool
-
 class DependencySet:
     ecosystem: Literal["python", "node"]
     package_manager: str | None
+    package_manager_version: str | None
     manifests: list[ManifestRef]
-    lockfiles: list[LockfileRef]
     declared: list[DeclaredDep]
-    resolved: list[ResolvedDep]
 
 class Technology:
     name: str
@@ -89,6 +80,7 @@ class BuildScript:
     name: str
     command: str
     package_manager: str | None
+    package_manager_version: str | None
     argv: list[str] | None
     source: SourceRef
 
@@ -123,11 +115,19 @@ class Workspace:
     virtual_root: bool
     members: list[str]
 
+class FileRequest:
+    path: str
+    reason: str
+    priority: int
+
 class ScanResult:
     schema_version: int
     root: str
     upload_root: str
     scan_origin: str
+    status: Literal["needs_files", "complete"]
+    completeness: Literal["complete", "partial"]
+    file_requests: list[FileRequest]
     workspace: Workspace | None
     applications: list[Application]
     diagnostics: list[Diagnostic]
@@ -141,4 +141,13 @@ def scan(
     max_files: int | None = None,
     follow_symlinks: bool = False,
     extra_ignore_files: list[str] | None = None,
+) -> ScanResult: ...
+def analyze(
+    files: Iterable[FileEntry],
+    contents: Mapping[str, bytes | None] | None = None,
+    *,
+    inventory_complete: bool = True,
+    hints: AnalysisHints | None = None,
+    max_files: int | None = None,
+    max_file_bytes: int = 2 * 1024 * 1024,
 ) -> ScanResult: ...

@@ -412,6 +412,7 @@ def test_node_workspace_manager_kinds(tmp_path: Path, manager: str) -> None:
     result = kenbun.scan(tmp_path)
     assert result.workspace.kind == manager
     assert app(result, "apps/web").dependencies[0].package_manager == manager
+    assert app(result, "apps/web").dependencies[0].package_manager_version == "1.0.0"
 
 
 def test_node_workspace_kind_without_manager_evidence(tmp_path: Path) -> None:
@@ -434,7 +435,42 @@ def test_node_workspace_kind_without_manager_evidence(tmp_path: Path) -> None:
     assert app(result, "apps/web").dependencies[0].package_manager is None
 
 
-def test_ambiguous_manager_does_not_default_to_npm(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("lockfile", "manager"),
+    [
+        ("package-lock.json", "npm"),
+        ("pnpm-lock.yaml", "pnpm"),
+        ("yarn.lock", "yarn"),
+        ("bun.lock", "bun"),
+    ],
+)
+def test_lockfile_presence_infers_a_package_manager(
+    tmp_path: Path,
+    lockfile: str,
+    manager: str,
+) -> None:
+    make(
+        tmp_path,
+        {
+            "package.json": package(
+                dependencies={"next": "16", "react": "19"},
+                scripts={"build": "next build"},
+                package_manager=None,
+            ),
+            lockfile: "",
+            "app/page.jsx": "export default function Page() {}",
+        },
+    )
+
+    application = app(kenbun.scan(tmp_path))
+
+    assert application.dependencies[0].package_manager == manager
+    assert application.dependencies[0].package_manager_version is None
+    assert application.build_scripts[0].package_manager == manager
+    assert application.build_scripts[0].package_manager_version is None
+
+
+def test_ambiguous_lockfiles_do_not_choose_a_package_manager(tmp_path: Path) -> None:
     make(
         tmp_path,
         {
@@ -455,7 +491,32 @@ def test_ambiguous_manager_does_not_default_to_npm(tmp_path: Path) -> None:
     assert "KB308" in [diagnostic.code for diagnostic in result.diagnostics]
 
 
-def test_library_manager_ambiguity_is_still_diagnostic(tmp_path: Path) -> None:
+def test_explicit_package_manager_version_is_reported(tmp_path: Path) -> None:
+    make(
+        tmp_path,
+        {
+            "package.json": package(
+                dependencies={"next": "16", "react": "19"},
+                scripts={"build": "next build"},
+                package_manager="pnpm@10.12.1+sha512.example",
+            ),
+            "app/page.jsx": "export default function Page() {}",
+        },
+    )
+
+    application = app(kenbun.scan(tmp_path))
+
+    assert application.dependencies[0].package_manager == "pnpm"
+    assert (
+        application.dependencies[0].package_manager_version == "10.12.1+sha512.example"
+    )
+    assert application.build_scripts[0].package_manager == "pnpm"
+    assert (
+        application.build_scripts[0].package_manager_version == "10.12.1+sha512.example"
+    )
+
+
+def test_library_lockfiles_are_ignored(tmp_path: Path) -> None:
     make(
         tmp_path,
         {
@@ -466,7 +527,6 @@ def test_library_manager_ambiguity_is_still_diagnostic(tmp_path: Path) -> None:
     )
     result = kenbun.scan(tmp_path)
     assert result.applications == []
-    assert "KB308" in [diagnostic.code for diagnostic in result.diagnostics]
 
 
 def test_application_dir_accepts_node_application(tmp_path: Path) -> None:
