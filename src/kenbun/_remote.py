@@ -58,17 +58,26 @@ class RemoteAnalysis:
             raise RuntimeError("Remote analysis is not complete")
         return self._current
 
+    def should_fetch(self, request: FileRequest, size: int | None) -> bool:
+        if not any(pending.path == request.path for pending in self.file_requests):
+            raise ValueError(f"File request for {request.path!r} is not pending")
+        if size is not None and (
+            not isinstance(size, int) or isinstance(size, bool) or size < 0
+        ):
+            raise ValueError("size must be a non-negative integer or None")
+        return size is None or size <= self._max_file_bytes
+
     def update(self, contents: Mapping[str, bytes | None]) -> None:
         if not self.file_requests:
             raise RuntimeError("Remote analysis is already complete")
 
         response = dict(contents)
-        requests_by_path = {request.path: request for request in self.file_requests}
-        missing = requests_by_path.keys() - response.keys()
+        requested_paths = {request.path for request in self.file_requests}
+        missing = requested_paths - response.keys()
         if missing:
             paths = ", ".join(sorted(missing))
             raise ValueError(f"Missing responses for requested files: {paths}")
-        unexpected = response.keys() - requests_by_path.keys()
+        unexpected = response.keys() - requested_paths
         if unexpected:
             paths = ", ".join(sorted(unexpected))
             raise ValueError(f"Received unrequested files: {paths}")
@@ -76,10 +85,10 @@ class RemoteAnalysis:
         for path, content in response.items():
             if content is not None and not isinstance(content, bytes):
                 raise TypeError(f"Content for {path!r} must be bytes or None")
-            if content is not None and len(content) > requests_by_path[path].max_bytes:
+            if content is not None and len(content) > self._max_file_bytes:
                 raise ValueError(
                     f"Content for {path!r} exceeds its "
-                    f"{requests_by_path[path].max_bytes}-byte limit"
+                    f"{self._max_file_bytes}-byte limit"
                 )
 
         self._contents.update(response)

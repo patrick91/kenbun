@@ -195,7 +195,6 @@ impl FileSet {
                                 path: rel.to_string(),
                                 reason: reason.to_string(),
                                 priority,
-                                max_bytes: source.max_file_bytes,
                             }
                         });
                     None
@@ -427,7 +426,6 @@ pub fn virtual_files(
                         path: path.clone(),
                         reason: "ignore rules".to_string(),
                         priority: 0,
-                        max_bytes: max_file_bytes,
                     },
                 );
             }

@@ -117,7 +117,6 @@ class FileRequest:
     path: str
     reason: str
     priority: int
-    max_bytes: int
 
 class ScanResult:
     schema_version: int

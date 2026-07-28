@@ -191,7 +191,6 @@ pub struct FileRequest {
     pub path: String,
     pub reason: String,
     pub priority: u32,
-    pub max_bytes: u64,
 }
 
 #[pyclass(get_all, frozen, skip_from_py_object)]

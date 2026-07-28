@@ -94,16 +94,19 @@ def analyze(
 metadata such as blob identifiers and repository-reported sizes belongs to the
 caller. A path omitted from `contents` has not been fetched. `None` means the
 caller cannot provide the content and prevents that path from being requested
-again. `max_file_bytes` configures the per-file parse cap advertised on every
-request. The stateless primitive treats oversized contents as unavailable.
+again. `max_file_bytes` configures the per-file parse cap used by both the
+stateless primitive and remote session. Oversized stateless contents are
+treated as unavailable.
 
 `remote_analysis()` creates a stateful analysis over that inventory. Its
 `file_requests` property contains the current ordered `list[FileRequest]`.
-`update()` requires one `bytes | None` response for every
-request, rejects contents larger than that request's `max_bytes`, accumulates
-the response, and advances the analysis. `result` is available only after
-completion. The session owns round limits, progress validation, and the
-accumulated contents.
+`should_fetch(request, size)` checks a repository-reported size against the
+session's configured limit before transport work begins; an unknown size is
+fetchable. `update()` requires one `bytes | None` response for every request,
+rejects oversized contents using their actual length, accumulates the response,
+and advances the analysis. `result` is available only after completion. The
+session owns file and round limits, progress validation, and the accumulated
+contents.
 
 `analyze()` is pure and stateless. A caller repeats the call with accumulated
 contents until `status="complete"`. Every unresolved path is requested at
@@ -187,8 +190,7 @@ Workspace
 FileRequest
 ├─ path: str
 ├─ reason: str
-├─ priority: int
-└─ max_bytes: int
+└─ priority: int
 ```
 
 An `Application` may have both Python and Node dependency sets. `python` and

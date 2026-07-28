@@ -47,10 +47,6 @@ def test_analyze_accepts_generic_iterables_and_mappings() -> None:
 
 
 def test_analyze_applies_custom_file_limit() -> None:
-    requested = kenbun.analyze(["pyproject.toml"], max_file_bytes=4)
-
-    assert requested.file_requests[0].max_bytes == 4
-
     result = kenbun.analyze(
         ["pyproject.toml"],
         {"pyproject.toml": b"12345"},

@@ -67,9 +67,33 @@ def test_remote_analysis_validates_updates() -> None:
 def test_remote_analysis_applies_custom_file_limit() -> None:
     analysis = kenbun.remote_analysis(["pyproject.toml"], max_file_bytes=4)
 
-    assert analysis.file_requests[0].max_bytes == 4
+    request = analysis.file_requests[0]
+    assert analysis.should_fetch(request, None)
+    assert analysis.should_fetch(request, 4)
+    assert not analysis.should_fetch(request, 5)
     with pytest.raises(ValueError, match="4-byte limit"):
         analysis.update({"pyproject.toml": b"12345"})
+
+
+@pytest.mark.parametrize("size", [-1, True, 1.5])
+def test_remote_analysis_should_fetch_requires_valid_size(size: int) -> None:
+    analysis = kenbun.remote_analysis(["pyproject.toml"])
+
+    with pytest.raises(ValueError, match="non-negative integer or None"):
+        analysis.should_fetch(analysis.file_requests[0], size)
+
+
+def test_remote_analysis_should_fetch_requires_pending_request() -> None:
+    first = kenbun.remote_analysis(["pyproject.toml"])
+    stale_request = first.file_requests[0]
+    first.update({"pyproject.toml": FASTAPI_MANIFEST})
+
+    with pytest.raises(ValueError, match="not pending"):
+        first.should_fetch(stale_request, 1)
+
+    second = kenbun.remote_analysis(["app.py"])
+    with pytest.raises(ValueError, match="not pending"):
+        second.should_fetch(stale_request, 1)
 
 
 def test_remote_analysis_enforces_round_limit() -> None:

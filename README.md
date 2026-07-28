@@ -54,12 +54,14 @@ while file_requests := analysis.file_requests:
 result = analysis.result
 ```
 
-Each `FileRequest` contains a path, reason, priority, and per-file byte limit.
-The caller owns transport-specific metadata and returns `bytes` or `None` for
-every requested path. `scan()` walks a real directory; `analyze()` remains the
-pure, stateless primitive beneath `remote_analysis()`. Both analysis modes
-produce schema v3 `ScanResult` objects with deterministic ordering and
-canonical JSON.
+Each `FileRequest` contains a path, reason, and priority. When transport
+metadata includes a file size, call `analysis.should_fetch(request, size)`
+before fetching it. Unknown sizes are fetchable and Kenbun still validates
+the actual content supplied to `update()`. The caller owns transport-specific
+metadata and returns `bytes` or `None` for every requested path. `scan()` walks
+a real directory; `analyze()` remains the pure, stateless primitive beneath
+`remote_analysis()`. Both analysis modes produce schema v3 `ScanResult` objects
+with deterministic ordering and canonical JSON.
 
 ## Supported detection
 
