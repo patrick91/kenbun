@@ -1,20 +1,15 @@
 mod diag;
-mod entrypoint;
+mod ecosystems;
 mod fileset;
-mod manifest;
 mod model;
-mod node;
-mod norm;
-mod runtime;
 mod scan;
-mod workspace;
 
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyBool;
+use pyo3::types::{PyBool, PyString};
 
 use crate::model::ScanResult;
 
@@ -26,19 +21,28 @@ unsafe extern "C" {
 /// Statically analyze a directory: find applications, technologies,
 /// entrypoints, build facts, and problems without executing user code.
 #[pyfunction]
-#[pyo3(name = "scan", signature = (root, *, application_dir=None, entrypoint=None, max_files=None, follow_symlinks=false, extra_ignore_files=None))]
+#[pyo3(name = "scan", signature = (root, *, ecosystems=None, application_dir=None, entrypoint=None, max_files=None, follow_symlinks=false, extra_ignore_files=None))]
+#[expect(clippy::too_many_arguments, reason = "mirrors the Python API")]
 fn scan_py(
     py: Python<'_>,
     root: PathBuf,
+    ecosystems: Option<&Bound<'_, PyAny>>,
     application_dir: Option<String>,
     entrypoint: Option<String>,
     max_files: Option<u64>,
     follow_symlinks: bool,
     extra_ignore_files: Option<Vec<String>>,
 ) -> PyResult<ScanResult> {
+    let ecosystems = extract_ecosystems(ecosystems)?;
+    if !ecosystems.python && entrypoint.is_some() {
+        return Err(PyValueError::new_err(
+            "entrypoint requires the 'python' ecosystem",
+        ));
+    }
     let opts = scan::ScanOptions {
         application_dir,
         entrypoint,
+        ecosystems,
         max_files,
         follow_symlinks,
         extra_ignore_files: extra_ignore_files.unwrap_or_default(),
@@ -50,11 +54,13 @@ fn scan_py(
 /// Analyze a caller-provided repository inventory without filesystem or
 /// network access. Missing contents are returned as ordered file requests.
 #[pyfunction]
-#[pyo3(signature = (files, contents=None, *, inventory_complete=true, hints=None, max_files=None, max_file_bytes=2_097_152))]
+#[pyo3(signature = (files, contents=None, *, ecosystems=None, inventory_complete=true, hints=None, max_files=None, max_file_bytes=2_097_152))]
+#[expect(clippy::too_many_arguments, reason = "mirrors the Python API")]
 fn analyze(
     py: Python<'_>,
     files: &Bound<'_, PyAny>,
     contents: Option<&Bound<'_, PyAny>>,
+    ecosystems: Option<&Bound<'_, PyAny>>,
     inventory_complete: bool,
     hints: Option<BTreeMap<String, Vec<String>>>,
     max_files: Option<u64>,
@@ -119,7 +125,50 @@ fn analyze(
         max_file_bytes,
     )
     .map_err(PyValueError::new_err)?;
-    Ok(py.detach(|| scan::analyze(&fs, inventory_complete)))
+    let ecosystems = extract_ecosystems(ecosystems)?;
+    Ok(py.detach(|| scan::analyze(&fs, inventory_complete, ecosystems)))
+}
+
+/// Validate Python's flexible iterable input at the public boundary.
+fn extract_ecosystems(value: Option<&Bound<'_, PyAny>>) -> PyResult<scan::EcosystemSelection> {
+    let Some(value) = value else {
+        return Ok(scan::EcosystemSelection::default());
+    };
+    if value.is_instance_of::<PyString>() {
+        return Err(PyTypeError::new_err(
+            "ecosystems must be an iterable of ecosystem names, not a string",
+        ));
+    }
+
+    let items = value
+        .try_iter()
+        .map_err(|_| PyTypeError::new_err("ecosystems must be an iterable of ecosystem names"))?;
+    let mut selection = scan::EcosystemSelection {
+        python: false,
+        node: false,
+    };
+    let mut selected = false;
+    for item in items {
+        let name = item?
+            .extract::<String>()
+            .map_err(|_| PyTypeError::new_err("ecosystems must contain only strings"))?;
+        selected = true;
+        match name.as_str() {
+            "python" => selection.python = true,
+            "node" => selection.node = true,
+            _ => {
+                return Err(PyValueError::new_err(format!(
+                    "unknown ecosystem '{name}'; expected 'python' or 'node'"
+                )));
+            }
+        }
+    }
+    if !selected {
+        return Err(PyValueError::new_err(
+            "ecosystems must contain at least one of: 'python', 'node'",
+        ));
+    }
+    Ok(selection)
 }
 
 #[pymodule(gil_used = false, name = "_kenbun")]

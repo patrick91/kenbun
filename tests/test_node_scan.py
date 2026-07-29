@@ -83,13 +83,6 @@ def technology(application: kenbun.Application, name: str) -> kenbun.Technology:
             {"vite.config.ts": "export default {}"},
             "vite build",
         ),
-        (
-            "@react-router/dev",
-            "react-router",
-            {"react": "19", "vite": "8"},
-            {"react-router.config.ts": "export default {}"},
-            "react-router build",
-        ),
         ("@solidjs/start", "solidstart", {"solid-js": "1"}, {}, "vinxi build"),
         (
             "@remix-run/dev",
@@ -132,18 +125,27 @@ def test_framework_identity(
     assert application.build_scripts[0].package_manager == "npm"
 
 
-def test_react_router_library_mode_is_not_an_application(tmp_path: Path) -> None:
+def test_react_router_framework_mode_is_not_detected(tmp_path: Path) -> None:
     make(
         tmp_path,
         {
-            "package.json": package(dependencies={"react-router": "7", "react": "19"}),
-            "src/index.js": "export {};",
+            "package.json": package(
+                dependencies={"@react-router/dev": "7", "react": "19"},
+                dev_dependencies={"vite": "8"},
+                scripts={"build": "react-router build"},
+            ),
+            "react-router.config.ts": "export default {};",
+            "vite.config.ts": (
+                'import { reactRouter } from "@react-router/dev/vite";\n'
+                "export default {plugins: [reactRouter()]};"
+            ),
+            "app/root.tsx": "export default function Root() {}",
         },
     )
     assert kenbun.scan(tmp_path).applications == []
 
 
-def test_strict_vite_application_and_safe_build_argv(tmp_path: Path) -> None:
+def test_vite_application_and_safe_build_argv(tmp_path: Path) -> None:
     make(
         tmp_path,
         {
@@ -167,6 +169,21 @@ def test_strict_vite_application_and_safe_build_argv(tmp_path: Path) -> None:
     payload = json.loads(result.to_json())
     assert payload["applications"][0]["dependencies"][0]["ecosystem"] == "node"
     assert payload["applications"][0]["build_scripts"][0]["command"] == "vite build"
+
+
+def test_vite_application_does_not_require_build_script_or_config(
+    tmp_path: Path,
+) -> None:
+    make(
+        tmp_path,
+        {
+            "package.json": package(dev_dependencies={"vite": "8"}),
+            "index.html": "<!doctype html>",
+        },
+    )
+    application = app(kenbun.scan(tmp_path))
+    assert technology(application, "vite").role == "primary"
+    assert application.build_scripts == []
 
 
 def test_vite_library_without_index_is_not_an_application(tmp_path: Path) -> None:
@@ -236,6 +253,29 @@ def test_same_root_primary_frameworks_share_one_application(tmp_path: Path) -> N
     }
     assert primary == {"fastapi", "nextjs"}
     assert "KB101" in [diagnostic.code for diagnostic in result.diagnostics]
+
+    python_application = app(kenbun.scan(tmp_path, ecosystems={"python"}))
+    assert {item.name for item in python_application.technologies} == {
+        "fastapi",
+        "python",
+    }
+    assert {item.ecosystem for item in python_application.dependencies} == {"python"}
+    assert python_application.python is not None
+    assert python_application.node is None
+
+    node_application = app(kenbun.scan(tmp_path, ecosystems=["node", "node"]))
+    assert {item.name for item in node_application.technologies} == {
+        "javascript",
+        "nextjs",
+        "react",
+    }
+    assert {item.ecosystem for item in node_application.dependencies} == {"node"}
+    assert node_application.python is None
+    assert node_application.node is not None
+
+    with pytest.raises(ValueError) as error:
+        kenbun.scan(tmp_path, ecosystems=["node"], entrypoint="main:app")
+    assert str(error.value) == "entrypoint requires the 'python' ecosystem"
 
 
 def test_node_primary_preserves_same_root_python_library_facts(tmp_path: Path) -> None:
@@ -356,6 +396,26 @@ def test_mixed_uv_and_node_workspace_discovers_node_member(tmp_path: Path) -> No
         "apps/site",
         "backend/api",
     ]
+
+    python_result = kenbun.scan(tmp_path, ecosystems={"python"})
+    assert python_result.workspace.kind == "uv"
+    assert python_result.workspace.members == [".", "backend/api"]
+    assert [item.application_dir for item in python_result.applications] == [
+        "backend/api"
+    ]
+
+    node_result = kenbun.scan(tmp_path, ecosystems={"node"})
+    assert node_result.workspace.kind == "pnpm"
+    assert node_result.workspace.members == [".", "apps/site"]
+    assert [item.application_dir for item in node_result.applications] == ["apps/site"]
+
+    python_from_node_member = kenbun.scan(
+        tmp_path / "apps" / "site" / "src",
+        ecosystems={"python"},
+    )
+    assert python_from_node_member.upload_root == "."
+    assert python_from_node_member.workspace is None
+    assert python_from_node_member.applications == []
 
 
 def test_workspace_virtual_root_follows_root_application(tmp_path: Path) -> None:
@@ -616,19 +676,14 @@ def test_official_create_vue_typescript_scaffold_is_standalone_vite(
     assert technology(app(kenbun.scan(tmp_path)), "vite").role == "primary"
 
 
-@pytest.mark.parametrize(
-    "command",
-    ["vite --mode build", "vite --config build", "vite --base build"],
-)
-def test_vite_option_values_do_not_count_as_build_subcommand(
-    tmp_path: Path, command: str
+def test_vite_config_and_build_script_do_not_replace_direct_dependency(
+    tmp_path: Path,
 ) -> None:
     make(
         tmp_path,
         {
-            "package.json": package(
-                dev_dependencies={"vite": "8"}, scripts={"build": command}
-            ),
+            "package.json": package(scripts={"build": "vite build"}),
+            "vite.config.ts": "export default {};",
             "index.html": "<!doctype html>",
         },
     )

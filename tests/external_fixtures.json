@@ -102,16 +102,12 @@
     }
   },
   {
-    "name": "react-router-basic",
+    "name": "react-router-unsupported",
     "repository": "test-patrick/kenbun-react-router-basic",
     "revision": "eaaa53d894f3f85893140d762fc9e13e09c50a6d",
     "expected": {
-      "applications": [{
-        "application_dir": ".",
-        "technologies": ["build-tool:supporting:vite:high", "framework:primary:react-router:high", "language:supporting:typescript:high", "ui-framework:supporting:react:high"],
-        "dependency_managers": {"node": "npm"},
-        "build_scripts": [["npm", "react-router build", ["react-router", "build"]]]
-      }]
+      "applications": [],
+      "diagnostic_codes": ["KB102"]
     }
   },
   {

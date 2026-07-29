@@ -2,11 +2,11 @@
 
 use std::path::{Path, PathBuf};
 
+use super::node::{self, RawNodeDiscovery};
+use super::python::manifest::{parse_pyproject, UvWorkspace};
 use crate::diag;
 use crate::fileset::{read_bounded_path, FileSet};
-use crate::manifest::{parse_pyproject, UvWorkspace};
 use crate::model::{Diagnostic, Workspace};
-use crate::node;
 
 /// Result of upward discovery: the directory the
 /// walk should actually start from, plus the relative frames for the result.
@@ -20,7 +20,11 @@ pub struct EffectiveRoot {
 
 /// Walk real ancestors looking for a uv or Node workspace that contains the
 /// scan root, including directories nested inside a declared member.
-pub fn discover_upward(scan_root: &Path) -> EffectiveRoot {
+pub fn discover_upward(
+    scan_root: &Path,
+    include_python: bool,
+    include_node: bool,
+) -> EffectiveRoot {
     let same = EffectiveRoot {
         walk_root: scan_root.to_path_buf(),
         upload_root: ".".into(),
@@ -32,11 +36,10 @@ pub fn discover_upward(scan_root: &Path) -> EffectiveRoot {
     }
 
     // If the scan root itself is a workspace root, nothing to discover.
-    if let Some(ws) = read_workspace_table(&scan_root.join("pyproject.toml")) {
-        let _ = ws;
+    if include_python && read_workspace_table(&scan_root.join("pyproject.toml")).is_some() {
         return same;
     }
-    if read_node_workspace_patterns(scan_root).is_some() {
+    if include_node && read_node_workspace_patterns(scan_root).is_some() {
         return same;
     }
 
@@ -47,8 +50,12 @@ pub fn discover_upward(scan_root: &Path) -> EffectiveRoot {
         if ups > 16 {
             break;
         }
-        let uv_workspace = read_workspace_table(&parent.join("pyproject.toml"));
-        let node_patterns = read_node_workspace_patterns(&parent);
+        let uv_workspace = include_python
+            .then(|| read_workspace_table(&parent.join("pyproject.toml")))
+            .flatten();
+        let node_patterns = include_node
+            .then(|| read_node_workspace_patterns(&parent))
+            .flatten();
         if uv_workspace.is_some() || node_patterns.is_some() {
             let Ok(rel) = scan_root.strip_prefix(&parent) else {
                 break;
@@ -177,6 +184,83 @@ fn glob_matches(pattern: &str, rel: &str) -> bool {
         ..glob::MatchOptions::default()
     };
     glob::Pattern::new(pattern).is_ok_and(|p| p.matches_with(rel, options))
+}
+
+pub struct RootWorkspaceInfo {
+    pub workspace: Option<Workspace>,
+    pub diagnostics: Vec<Diagnostic>,
+}
+
+/// Reconcile uv and Node workspace declarations at the effective scan root.
+pub fn discover_at_root(
+    fs: &FileSet,
+    node_discovery: &RawNodeDiscovery,
+    include_python: bool,
+    include_node: bool,
+) -> RootWorkspaceInfo {
+    let mut diagnostics = Vec::new();
+    let root_parsed = include_python
+        .then(|| fs.read_str("pyproject.toml"))
+        .flatten()
+        .as_deref()
+        .and_then(|source| parse_pyproject(source).ok());
+    let uv_workspace = root_parsed
+        .as_ref()
+        .and_then(|pyproject| pyproject.tool.as_ref())
+        .and_then(|tool| tool.uv.as_ref())
+        .and_then(|uv| uv.workspace.clone());
+    let mut workspace = None;
+    if let Some(uv_workspace) = &uv_workspace {
+        let has_project = root_parsed
+            .as_ref()
+            .is_some_and(|pyproject| pyproject.project.is_some());
+        let info = expand_workspace(fs, uv_workspace, has_project);
+        diagnostics.extend(info.diagnostics);
+        workspace = Some(info.workspace);
+    }
+
+    if let Some(node_workspace) = include_node
+        .then_some(node_discovery)
+        .and_then(|discovery| {
+            discovery
+                .workspaces
+                .iter()
+                .find(|workspace| workspace.path == ".")
+        })
+    {
+        for pattern in &node_workspace.unmatched_patterns {
+            diagnostics.push(diag::kb402(".", pattern));
+        }
+        let mut node_members = node_workspace.members.clone();
+        if let Some(workspace) = &mut workspace {
+            workspace.kind = "mixed".to_string();
+            workspace.members.append(&mut node_members);
+            workspace
+                .members
+                .sort_by(|a, b| (a != ".").cmp(&(b != ".")).then(a.cmp(b)));
+            workspace.members.dedup();
+        } else {
+            let mut members = vec![".".to_string()];
+            members.append(&mut node_members);
+            members.sort_by(|a, b| (a != ".").cmp(&(b != ".")).then(a.cmp(b)));
+            members.dedup();
+            workspace = Some(Workspace {
+                kind: node_workspace
+                    .package_manager
+                    .as_ref()
+                    .map(|manager| manager.name.clone())
+                    .unwrap_or_else(|| "node".to_string()),
+                path: ".".to_string(),
+                virtual_root: true,
+                members,
+            });
+        }
+    }
+
+    RootWorkspaceInfo {
+        workspace,
+        diagnostics,
+    }
 }
 
 pub struct WorkspaceInfo {

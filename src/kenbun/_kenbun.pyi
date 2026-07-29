@@ -2,7 +2,7 @@ from collections.abc import Iterable, Mapping
 from os import PathLike
 from typing import Literal
 
-from kenbun._types import AnalysisHints, FileEntry
+from kenbun._types import AnalysisHints, Ecosystem, FileEntry
 
 class Span:
     start_line: int
@@ -136,6 +136,7 @@ class ScanResult:
 def scan(
     root: str | PathLike[str],
     *,
+    ecosystems: Iterable[Ecosystem] | None = None,
     application_dir: str | None = None,
     entrypoint: str | None = None,
     max_files: int | None = None,
@@ -146,6 +147,7 @@ def analyze(
     files: Iterable[FileEntry],
     contents: Mapping[str, bytes | None] | None = None,
     *,
+    ecosystems: Iterable[Ecosystem] | None = None,
     inventory_complete: bool = True,
     hints: AnalysisHints | None = None,
     max_files: int | None = None,

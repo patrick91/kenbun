@@ -31,6 +31,7 @@ The words **must**, **must not**, **should**, and **may** are normative.
 def scan(
     root: str | os.PathLike[str],
     *,
+    ecosystems: Iterable[Literal["python", "node"]] | None = None,
     application_dir: str | None = None,
     entrypoint: str | None = None,
     max_files: int | None = None,
@@ -42,6 +43,13 @@ def scan(
 `root` must identify a real directory. Local scans satisfy reads immediately
 and therefore return `status="complete"` with no `file_requests`.
 
+`ecosystems` selects which detectors run. `None` selects both supported
+ecosystems. `"python"` selects Python and `"node"` selects modern JavaScript
+and TypeScript. Order and duplicates have no effect. A selection must be a
+non-string iterable containing at least one supported name; invalid values
+raise `TypeError` or `ValueError`. Excluded ecosystems do not contribute
+workspace framing, manifest reads, applications, facts, or diagnostics.
+
 `application_dir` is an optional path relative to the caller-supplied scan root.
 Kenbun translates it into the effective workspace root, validates that it
 remains under the caller's root, exists, and matches a detected application. It
@@ -52,7 +60,8 @@ the absence of `application_dir`, it applies to the application containing the
 scan origin.
 
 `entrypoint` uses `module:attribute` syntax and is currently interpreted only
-by the FastAPI resolver. It is validated against statically parsed source.
+by the FastAPI resolver. It is validated against statically parsed source and
+therefore requires the Python ecosystem.
 
 `max_files` bounds the filesystem walk. Exceeding it returns the partial facts
 with `KB802`. Symlinks are not followed unless `follow_symlinks=True`; when
@@ -78,6 +87,7 @@ class FileEntry(TypedDict):
 def remote_analysis(
     files: Iterable[FileEntry],
     *,
+    ecosystems: Iterable[Literal["python", "node"]] | None = None,
     inventory_complete: bool = True,
     hints: AnalysisHints | None = None,
     max_rounds: int = 20,
@@ -89,6 +99,7 @@ def analyze(
     files: Iterable[FileEntry],
     contents: Mapping[str, bytes | None] | None = None,
     *,
+    ecosystems: Iterable[Literal["python", "node"]] | None = None,
     inventory_complete: bool = True,
     hints: AnalysisHints | None = None,
     max_files: int | None = None,
@@ -107,6 +118,11 @@ requested; entries already present in `contents` consume that budget. Once
 exhausted, later reads are treated as unavailable. `max_file_bytes` configures
 the per-file parse cap used by both the stateless primitive and remote session.
 Oversized stateless contents are treated as unavailable.
+
+`ecosystems` has the same semantics as `scan()`. It limits manifest and source
+requests as well as the returned facts. `RemoteAnalysis` snapshots the
+selection when the session is created, so one-shot iterables remain stable
+across analysis rounds.
 
 `remote_analysis()` creates a stateful analysis over that inventory. Its
 `file_requests` property contains the current ordered `list[FileRequest]`.
@@ -293,21 +309,15 @@ declarative dependency and script data is used.
 | `nuxt` | `nuxt` | Vue, JavaScript/TypeScript |
 | `@sveltejs/kit` | `sveltekit` | Svelte, Vite, JavaScript/TypeScript |
 | TanStack Start package | `tanstack-start` | React or Solid, Vite, TypeScript |
-| `@react-router/dev` plus config/build evidence | `react-router` | React and Vite |
 | `@solidjs/start` | `solidstart` | Solid, JavaScript/TypeScript |
 | `@remix-run/dev` | `remix` | React, JavaScript/TypeScript |
 
 These normalized technologies are primary frameworks. `react`, `vue`,
 `svelte`, and normalized `solid` are `ui-framework` technologies and normally
 supporting.
-`javascript` and `typescript` are language technologies. React Router used
-only as a routing library must not qualify an application; legacy Remix
-remains distinct from React Router Framework Mode.
-
-React Router Framework Mode specifically requires a direct `@react-router/dev`
-dependency plus at least one of: `react-router.config.*`, a Vite configuration
-containing `@react-router/dev/vite`, or a `build` script directly invoking
-`react-router build`.
+`javascript` and `typescript` are language technologies. React Router,
+including Framework Mode, does not qualify an application in v3. Legacy Remix
+remains a separately supported framework.
 
 ### 6.1 Vite boundary
 
@@ -316,13 +326,13 @@ application with `role="primary"` only when all of the following exist at the
 same directory:
 
 1. Vite is a direct dependency.
-2. An explicit `scripts.build` directly invokes `vite build`.
-3. A root `index.html` exists.
+2. A root `index.html` exists.
 
-Without all three, Vite may attach as supporting build tooling to an already
+Without both, Vite may attach as supporting build tooling to an already
 qualified application but must not create an application. This prevents a
 backend asset pipeline or a Vite-built library from being reported as a
-second deployable frontend.
+second deployable frontend. A `vite.config.*` file and `scripts.build` are
+optional and do not participate in application qualification.
 
 ### 6.2 Cross Inertia
 

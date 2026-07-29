@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Iterable, Mapping
 
 from kenbun._kenbun import FileRequest, ScanResult, analyze
-from kenbun._types import AnalysisHints, FileEntry
+from kenbun._types import AnalysisHints, Ecosystem, FileEntry
 
 DEFAULT_MAX_ROUNDS = 20
 DEFAULT_MAX_FILE_BYTES = 2 * 1024 * 1024
@@ -16,6 +16,7 @@ class RemoteAnalysis:
         self,
         files: Iterable[FileEntry],
         *,
+        ecosystems: Iterable[Ecosystem] | None = None,
         inventory_complete: bool = True,
         hints: AnalysisHints | None = None,
         max_rounds: int = DEFAULT_MAX_ROUNDS,
@@ -40,9 +41,14 @@ class RemoteAnalysis:
             or max_file_bytes < 1
         ):
             raise ValueError("max_file_bytes must be a positive integer")
+        if isinstance(ecosystems, str):
+            raise TypeError(
+                "ecosystems must be an iterable of ecosystem names, not a string"
+            )
 
         self._files = tuple(files)
         self._contents: dict[str, bytes | None] = {}
+        self._ecosystems = None if ecosystems is None else tuple(ecosystems)
         self._inventory_complete = inventory_complete
         self._hints = hints
         self._max_rounds = max_rounds
@@ -115,6 +121,7 @@ class RemoteAnalysis:
         return analyze(
             self._files,
             self._contents,
+            ecosystems=self._ecosystems,
             inventory_complete=self._inventory_complete,
             hints=self._hints,
             max_files=self._max_files,
@@ -133,6 +140,7 @@ class RemoteAnalysis:
 def remote_analysis(
     files: Iterable[FileEntry],
     *,
+    ecosystems: Iterable[Ecosystem] | None = None,
     inventory_complete: bool = True,
     hints: AnalysisHints | None = None,
     max_rounds: int = DEFAULT_MAX_ROUNDS,
@@ -141,6 +149,7 @@ def remote_analysis(
 ) -> RemoteAnalysis:
     return RemoteAnalysis(
         files,
+        ecosystems=ecosystems,
         inventory_complete=inventory_complete,
         hints=hints,
         max_rounds=max_rounds,

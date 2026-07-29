@@ -20,6 +20,7 @@ import kenbun
 
 result = kenbun.scan(
     Path("."),
+    ecosystems={"python", "node"},  # optional; defaults to both
     application_dir=None,  # optional repository-relative hint
 )
 
@@ -58,6 +59,13 @@ while file_requests := analysis.file_requests:
 result = analysis.result
 ```
 
+Pass `ecosystems={"python"}` or `ecosystems={"node"}` to `scan()`,
+`analyze()`, or `remote_analysis()` to restrict discovery. The `"node"`
+ecosystem covers both JavaScript and TypeScript. Selection also limits
+workspace discovery and remote file requests; omitted ecosystems do not
+contribute applications, facts, or diagnostics. `None` keeps the default of
+analyzing both ecosystems.
+
 Each `FileEntry` contains a path and its repository-reported size, or `None`
 when the size is unknown. Kenbun does not request entries known to exceed
 `max_file_bytes` and still validates the actual content supplied to `update()`.
@@ -78,12 +86,13 @@ Python applications:
 
 Node applications:
 
-- Next.js, Astro, Nuxt, SvelteKit, TanStack Start, React Router Framework Mode,
-  SolidStart, and legacy Remix.
-- Standalone Vite applications, using a deliberately strict rule: the same
-  directory must directly depend on Vite, define an explicit `build` script
-  that directly invokes `vite build`, and contain `index.html`.
+- Next.js, Astro, Nuxt, SvelteKit, TanStack Start, SolidStart, and legacy
+  Remix.
+- Standalone Vite applications: the same directory must directly depend on
+  Vite and contain `index.html`. A Vite config and build script are optional.
 - React, Vue, Svelte, and Solid as supporting UI-framework facts.
+
+React Router Framework Mode is not detected as an application yet.
 
 Vite can also be supporting build tooling for another application. In
 particular, a FastAPI application using Vite for frontend assets remains one
@@ -114,7 +123,8 @@ kept separate and must independently qualify as an application.
   optional safely parsed argv, optional package-manager facts, and source.
 
 See the [v3 specification](docs/spec.md) for the normative model and detection
-rules.
+rules. See [Architecture](docs/architecture.md) for the internal detector and
+assembly boundaries.
 
 ## External fixture corpus
 
@@ -138,7 +148,11 @@ Build the extension and run the tests with:
 
 ```bash
 uv run maturin develop --uv
-uv run pytest
+cargo fmt --all -- --check
+cargo clippy --all-targets --all-features -- -D warnings
 cargo test --all-targets --all-features
+uv run ruff check .
+uv run ruff format --check .
+uv run pytest -q
 cargo deny check
 ```

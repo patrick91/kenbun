@@ -6,10 +6,16 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde_json::{Map, Value};
+mod manifest;
+mod workspace;
 
+use super::boundary;
+use super::runtime::{self, RuntimePin};
 use crate::fileset::FileSet;
-use crate::runtime::{self, RuntimePin};
+use manifest::{parse_package_json, PackageManifest};
+use workspace::expand_workspace_patterns;
+
+pub(crate) use workspace::{parse_pnpm_workspace_yaml, workspace_pattern_matches};
 
 const LOCKFILE_NAMES: &[(&str, &str)] = &[
     ("package-lock.json", "npm"),
@@ -20,15 +26,7 @@ const LOCKFILE_NAMES: &[(&str, &str)] = &[
     ("bun.lockb", "bun"),
 ];
 const CONFIG_EXTENSIONS: &[&str] = &["js", "mjs", "cjs", "ts", "mts", "cts"];
-const CONFIG_PREFIXES: &[&str] = &[
-    "astro",
-    "next",
-    "nuxt",
-    "svelte",
-    "vite",
-    "react-router",
-    "remix",
-];
+const CONFIG_PREFIXES: &[&str] = &["astro", "next", "nuxt", "svelte", "vite", "remix"];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct RawNodeDiscovery {
@@ -112,11 +110,9 @@ pub(crate) struct RawTechnologySignal {
 pub(crate) struct RawViteSignals {
     pub direct_dependency: bool,
     pub config_files: Vec<String>,
-    pub script_names: Vec<String>,
-    pub build_script_invokes_vite_build: bool,
     pub has_index_html: bool,
-    /// Deliberately strict: a direct vite dependency, an explicit `build`
-    /// script invocation of `vite build`, and same-root index.html.
+    /// A direct Vite dependency and same-root index.html distinguish a
+    /// standalone application from a Vite-powered library or asset pipeline.
     pub standalone: bool,
 }
 
@@ -132,20 +128,6 @@ pub(crate) struct RawInertiaSignals {
 pub(crate) struct RawNodeParseError {
     pub path: String,
     pub message: String,
-}
-
-#[derive(Clone, Debug, Default)]
-struct PackageManifest {
-    parsed: bool,
-    name: Option<String>,
-    dependencies: BTreeMap<String, String>,
-    dev_dependencies: BTreeMap<String, String>,
-    optional_dependencies: BTreeMap<String, String>,
-    scripts: BTreeMap<String, String>,
-    package_manager: Option<String>,
-    requires_node: Option<String>,
-    declares_workspace: bool,
-    workspace_patterns: Vec<String>,
 }
 
 #[derive(Default)]
@@ -181,16 +163,7 @@ pub(crate) fn discover(fs: &FileSet) -> RawNodeDiscovery {
     }
 
     let package_dirs: Vec<String> = manifests.keys().cloned().collect();
-    let mut source_boundaries: BTreeSet<String> = package_dirs.iter().cloned().collect();
-    for marker in [
-        "pyproject.toml",
-        "requirements.txt",
-        "Pipfile",
-        "setup.py",
-        "manage.py",
-    ] {
-        source_boundaries.extend(fs.dirs_with(marker));
-    }
+    let source_boundaries = boundary::project_directories(fs);
     let owned_source_files = source_files_by_owner(fs, &source_boundaries);
     let mut workspace_builders: BTreeMap<String, WorkspaceBuilder> = BTreeMap::new();
 
@@ -244,7 +217,6 @@ pub(crate) fn discover(fs: &FileSet) -> RawNodeDiscovery {
             manifest,
         );
         let (technologies, vite, inertia) = classify_technologies(
-            fs,
             dir,
             manifest,
             &config_files,
@@ -312,434 +284,6 @@ pub(crate) fn discover(fs: &FileSet) -> RawNodeDiscovery {
         workspaces,
         parse_errors,
     }
-}
-
-fn parse_package_json(
-    path: &str,
-    source: &str,
-    errors: &mut Vec<RawNodeParseError>,
-) -> PackageManifest {
-    let value: Value = match serde_json::from_str(source) {
-        Ok(value) => value,
-        Err(error) => {
-            errors.push(raw_error(path, format!("invalid JSON: {error}")));
-            return PackageManifest::default();
-        }
-    };
-    let Some(object) = value.as_object() else {
-        errors.push(raw_error(path, "package.json root must be an object"));
-        return PackageManifest::default();
-    };
-
-    let name = optional_string(object, "name", path, errors);
-    let package_manager = optional_string(object, "packageManager", path, errors);
-    let requires_node = string_map(object, "engines", path, errors).remove("node");
-    let dependencies = string_map(object, "dependencies", path, errors);
-    let dev_dependencies = string_map(object, "devDependencies", path, errors);
-    let optional_dependencies = string_map(object, "optionalDependencies", path, errors);
-    let scripts = string_map(object, "scripts", path, errors);
-    let (declares_workspace, mut workspace_patterns) =
-        package_workspace_patterns(object.get("workspaces"), path, errors);
-    workspace_patterns.sort();
-    workspace_patterns.dedup();
-
-    PackageManifest {
-        parsed: true,
-        name,
-        dependencies,
-        dev_dependencies,
-        optional_dependencies,
-        scripts,
-        package_manager,
-        requires_node,
-        declares_workspace,
-        workspace_patterns,
-    }
-}
-
-fn optional_string(
-    object: &Map<String, Value>,
-    key: &str,
-    path: &str,
-    errors: &mut Vec<RawNodeParseError>,
-) -> Option<String> {
-    match object.get(key) {
-        None | Some(Value::Null) => None,
-        Some(Value::String(value)) => Some(value.clone()),
-        Some(_) => {
-            errors.push(raw_error(path, format!("`{key}` must be a string")));
-            None
-        }
-    }
-}
-
-fn string_map(
-    object: &Map<String, Value>,
-    key: &str,
-    path: &str,
-    errors: &mut Vec<RawNodeParseError>,
-) -> BTreeMap<String, String> {
-    let Some(value) = object.get(key) else {
-        return BTreeMap::new();
-    };
-    let Some(values) = value.as_object() else {
-        errors.push(raw_error(path, format!("`{key}` must be an object")));
-        return BTreeMap::new();
-    };
-    let mut out = BTreeMap::new();
-    for (name, value) in values {
-        if let Some(value) = value.as_str() {
-            out.insert(name.clone(), value.to_string());
-        } else {
-            errors.push(raw_error(path, format!("`{key}.{name}` must be a string")));
-        }
-    }
-    out
-}
-
-fn package_workspace_patterns(
-    value: Option<&Value>,
-    path: &str,
-    errors: &mut Vec<RawNodeParseError>,
-) -> (bool, Vec<String>) {
-    let Some(value) = value else {
-        return (false, Vec::new());
-    };
-    let packages = match value {
-        Value::Array(packages) => packages,
-        Value::Object(object) => {
-            let Some(packages) = object.get("packages") else {
-                errors.push(raw_error(
-                    path,
-                    "`workspaces` object must contain a `packages` array",
-                ));
-                return (true, Vec::new());
-            };
-            let Some(packages) = packages.as_array() else {
-                errors.push(raw_error(path, "`workspaces.packages` must be an array"));
-                return (true, Vec::new());
-            };
-            packages
-        }
-        _ => {
-            errors.push(raw_error(
-                path,
-                "`workspaces` must be an array or an object with `packages`",
-            ));
-            return (true, Vec::new());
-        }
-    };
-
-    let mut out = Vec::new();
-    for (index, value) in packages.iter().enumerate() {
-        if let Some(pattern) = value.as_str() {
-            let pattern = pattern.trim();
-            if pattern.is_empty() {
-                errors.push(raw_error(
-                    path,
-                    format!("`workspaces` pattern at index {index} is empty"),
-                ));
-            } else {
-                out.push(pattern.to_string());
-            }
-        } else {
-            errors.push(raw_error(
-                path,
-                format!("`workspaces` pattern at index {index} must be a string"),
-            ));
-        }
-    }
-    (true, out)
-}
-
-/// Parse only the root `packages` sequence used by pnpm. Unsupported YAML
-/// constructs become errors rather than being guessed or evaluated.
-pub(crate) fn parse_pnpm_workspace_yaml(source: &str) -> (Vec<String>, Vec<String>) {
-    let mut patterns = Vec::new();
-    let mut errors = Vec::new();
-    let mut in_packages = false;
-    let mut saw_packages = false;
-
-    for (index, original) in source.lines().enumerate() {
-        let line_number = index + 1;
-        let without_comment = strip_yaml_comment(original);
-        let trimmed = without_comment.trim();
-        if trimmed.is_empty() || trimmed == "---" || trimmed == "..." {
-            continue;
-        }
-        let indentation = without_comment.len() - without_comment.trim_start().len();
-
-        if indentation == 0 {
-            if in_packages && (trimmed == "-" || trimmed.starts_with("- ")) {
-                let item = trimmed.strip_prefix('-').unwrap_or(trimmed).trim();
-                match parse_yaml_scalar(item) {
-                    Ok(pattern) => patterns.push(pattern),
-                    Err(message) => errors.push(format!("line {line_number}: {message}")),
-                }
-                continue;
-            }
-            if let Some(rest) = trimmed.strip_prefix("packages:") {
-                if saw_packages {
-                    errors.push(format!("duplicate `packages` key at line {line_number}"));
-                }
-                saw_packages = true;
-                in_packages = true;
-                let rest = rest.trim();
-                if rest.is_empty() {
-                    continue;
-                }
-                if rest == "[]" {
-                    in_packages = false;
-                    continue;
-                }
-                match parse_inline_yaml_list(rest) {
-                    Ok(items) => patterns.extend(items),
-                    Err(message) => errors.push(format!("line {line_number}: {message}")),
-                }
-                in_packages = false;
-                continue;
-            }
-            in_packages = false;
-            continue;
-        }
-
-        if in_packages {
-            let Some(item) = trimmed.strip_prefix('-') else {
-                errors.push(format!(
-                    "line {line_number}: expected a `- <workspace glob>` list item"
-                ));
-                continue;
-            };
-            match parse_yaml_scalar(item.trim()) {
-                Ok(pattern) => patterns.push(pattern),
-                Err(message) => errors.push(format!("line {line_number}: {message}")),
-            }
-        }
-    }
-
-    if !saw_packages {
-        errors.push("missing root `packages` key".to_string());
-    }
-    patterns.sort();
-    patterns.dedup();
-    (patterns, errors)
-}
-
-fn strip_yaml_comment(line: &str) -> String {
-    let mut single = false;
-    let mut double = false;
-    let mut escaped = false;
-    for (index, ch) in line.char_indices() {
-        if escaped {
-            escaped = false;
-            continue;
-        }
-        match ch {
-            '\\' if double => escaped = true,
-            '\'' if !double => single = !single,
-            '"' if !single => double = !double,
-            '#' if !single && !double => return line[..index].to_string(),
-            _ => {}
-        }
-    }
-    line.to_string()
-}
-
-fn parse_inline_yaml_list(value: &str) -> Result<Vec<String>, String> {
-    let Some(inner) = value.strip_prefix('[').and_then(|v| v.strip_suffix(']')) else {
-        return Err("only a YAML list is supported after `packages:`".to_string());
-    };
-    if inner.trim().is_empty() {
-        return Ok(Vec::new());
-    }
-    let mut items = Vec::new();
-    let mut current = String::new();
-    let mut single = false;
-    let mut double = false;
-    let mut escaped = false;
-    for ch in inner.chars() {
-        if escaped {
-            current.push(ch);
-            escaped = false;
-            continue;
-        }
-        match ch {
-            '\\' if double => {
-                current.push(ch);
-                escaped = true;
-            }
-            '\'' if !double => {
-                single = !single;
-                current.push(ch);
-            }
-            '"' if !single => {
-                double = !double;
-                current.push(ch);
-            }
-            ',' if !single && !double => {
-                items.push(parse_yaml_scalar(current.trim())?);
-                current.clear();
-            }
-            _ => current.push(ch),
-        }
-    }
-    if single || double {
-        return Err("unterminated quoted scalar".to_string());
-    }
-    items.push(parse_yaml_scalar(current.trim())?);
-    Ok(items)
-}
-
-fn parse_yaml_scalar(value: &str) -> Result<String, String> {
-    let value = value.trim().trim_end_matches(',').trim();
-    if value.is_empty() {
-        return Err("workspace glob is empty".to_string());
-    }
-    if value.starts_with('\'') {
-        let Some(inner) = value.strip_prefix('\'').and_then(|v| v.strip_suffix('\'')) else {
-            return Err("unterminated single-quoted workspace glob".to_string());
-        };
-        let parsed = inner.replace("''", "'");
-        if parsed.is_empty() {
-            return Err("workspace glob is empty".to_string());
-        }
-        return Ok(parsed);
-    }
-    if value.starts_with('"') {
-        return serde_json::from_str::<String>(value)
-            .map_err(|error| format!("invalid double-quoted workspace glob: {error}"))
-            .and_then(|parsed| {
-                if parsed.is_empty() {
-                    Err("workspace glob is empty".to_string())
-                } else {
-                    Ok(parsed)
-                }
-            });
-    }
-    if value.starts_with('[') || value.starts_with('{') || value.contains("\n") {
-        return Err("unsupported YAML workspace glob construct".to_string());
-    }
-    Ok(value.to_string())
-}
-
-fn expand_workspace_patterns(
-    patterns: &[String],
-    package_dirs: &[String],
-) -> (Vec<String>, Vec<String>, Vec<String>) {
-    let mut included = BTreeSet::new();
-    let mut excluded = BTreeSet::new();
-    let mut unmatched = Vec::new();
-    let mut errors = Vec::new();
-
-    for original in patterns {
-        let (negative, raw) = original
-            .strip_prefix('!')
-            .map_or((false, original.as_str()), |value| (true, value));
-        let normalized = match normalize_workspace_pattern(raw) {
-            Ok(pattern) => pattern,
-            Err(message) => {
-                errors.push(format!("invalid workspace glob `{original}`: {message}"));
-                continue;
-            }
-        };
-        let options = glob::MatchOptions {
-            require_literal_separator: true,
-            ..glob::MatchOptions::default()
-        };
-        let mut matches = BTreeSet::new();
-        for expanded in expand_braces(&normalized) {
-            let pattern = match glob::Pattern::new(&expanded) {
-                Ok(pattern) => pattern,
-                Err(error) => {
-                    errors.push(format!("invalid workspace glob `{original}`: {error}"));
-                    continue;
-                }
-            };
-            matches.extend(
-                package_dirs
-                    .iter()
-                    .filter(|dir| pattern.matches_with(&display_dir(dir), options))
-                    .cloned(),
-            );
-        }
-        if matches.is_empty() && !negative {
-            unmatched.push(original.clone());
-        }
-        if negative {
-            excluded.extend(matches);
-        } else {
-            included.extend(matches);
-        }
-    }
-
-    for dir in excluded {
-        included.remove(&dir);
-    }
-    let members = included.into_iter().map(|dir| display_dir(&dir)).collect();
-    unmatched.sort();
-    unmatched.dedup();
-    errors.sort();
-    errors.dedup();
-    (members, unmatched, errors)
-}
-
-fn normalize_workspace_pattern(pattern: &str) -> Result<String, String> {
-    let mut pattern = pattern.trim().replace('\\', "/");
-    while let Some(stripped) = pattern.strip_prefix("./") {
-        pattern = stripped.to_string();
-    }
-    pattern = pattern
-        .trim_start_matches('/')
-        .trim_end_matches('/')
-        .to_string();
-    if let Some(stripped) = pattern.strip_suffix("/package.json") {
-        pattern = stripped.to_string();
-    }
-    if pattern.is_empty() {
-        return Err("empty pattern".to_string());
-    }
-    if pattern.split('/').any(|part| part == "..") {
-        return Err("pattern escapes the workspace root".to_string());
-    }
-    Ok(pattern)
-}
-
-pub(crate) fn workspace_pattern_matches(pattern: &str, rel: &str) -> bool {
-    let Ok(normalized) = normalize_workspace_pattern(pattern) else {
-        return false;
-    };
-    let options = glob::MatchOptions {
-        require_literal_separator: true,
-        ..glob::MatchOptions::default()
-    };
-    expand_braces(&normalized).into_iter().any(|expanded| {
-        glob::Pattern::new(&expanded).is_ok_and(|pattern| pattern.matches_with(rel, options))
-    })
-}
-
-fn expand_braces(pattern: &str) -> Vec<String> {
-    let Some(open) = pattern.find('{') else {
-        return vec![pattern.to_string()];
-    };
-    let Some(relative_close) = pattern[open + 1..].find('}') else {
-        return vec![pattern.to_string()];
-    };
-    let close = open + 1 + relative_close;
-    let alternatives: Vec<&str> = pattern[open + 1..close].split(',').collect();
-    if alternatives.len() < 2 {
-        return vec![pattern.to_string()];
-    }
-    let mut expanded = Vec::new();
-    for alternative in alternatives {
-        let next = format!(
-            "{}{}{}",
-            &pattern[..open],
-            alternative,
-            &pattern[close + 1..]
-        );
-        expanded.extend(expand_braces(&next));
-    }
-    expanded
 }
 
 fn same_root_config_files(fs: &FileSet, dir: &str) -> Vec<String> {
@@ -919,7 +463,6 @@ fn classify_language(
 }
 
 fn classify_technologies(
-    fs: &FileSet,
     dir: &str,
     manifest: &PackageManifest,
     config_files: &[String],
@@ -963,89 +506,19 @@ fn classify_technologies(
         add_signal(&mut signals, "javascript", "language", evidence.clone());
     }
 
-    let react_router_dependency = direct_dependency_evidence(manifest, "@react-router/dev");
-    let react_router_configs: Vec<String> = config_files
-        .iter()
-        .filter(|path| file_name(path).starts_with("react-router.config."))
-        .cloned()
-        .collect();
-    let react_router_vite_configs: Vec<String> = config_files
-        .iter()
-        .filter(|path| file_name(path).starts_with("vite.config."))
-        .filter(|path| {
-            fs.read_str(path)
-                .is_some_and(|source| source.contains("@react-router/dev/vite"))
-        })
-        .cloned()
-        .collect();
-    let react_router_build = manifest
-        .scripts
-        .get("build")
-        .is_some_and(|script| command_invokes_subcommand(script, "react-router", "build"));
-    if let Some(dependency_evidence) = react_router_dependency {
-        if !react_router_configs.is_empty()
-            || !react_router_vite_configs.is_empty()
-            || react_router_build
-        {
-            add_signal(
-                &mut signals,
-                "react-router",
-                "framework",
-                dependency_evidence,
-            );
-            for path in react_router_configs
-                .into_iter()
-                .chain(react_router_vite_configs)
-            {
-                add_signal(
-                    &mut signals,
-                    "react-router",
-                    "framework",
-                    format!("config:{path}"),
-                );
-            }
-            if react_router_build {
-                add_signal(
-                    &mut signals,
-                    "react-router",
-                    "framework",
-                    "script:build".to_string(),
-                );
-            }
-        }
-    }
-
     let direct_vite_evidence = direct_dependency_evidence(manifest, "vite");
     let vite_config_files: Vec<String> = config_files
         .iter()
         .filter(|path| file_name(path).starts_with("vite.config."))
         .cloned()
         .collect();
-    let vite_script_names: Vec<String> = manifest
-        .scripts
-        .iter()
-        .filter(|(_, script)| command_invokes(script, "vite"))
-        .map(|(name, _)| name.clone())
-        .collect();
-    let build_script_invokes_vite_build = manifest
-        .scripts
-        .get("build")
-        .is_some_and(|script| command_invokes_subcommand(script, "vite", "build"));
     let direct_vite = direct_vite_evidence.is_some();
-    let standalone = direct_vite && build_script_invokes_vite_build && has_index_html;
+    let standalone = direct_vite && has_index_html;
     if let Some(evidence) = direct_vite_evidence {
         add_signal(&mut signals, "vite", "build-tool", evidence);
     }
     for path in &vite_config_files {
         add_signal(&mut signals, "vite", "build-tool", format!("config:{path}"));
-    }
-    for script in &vite_script_names {
-        add_signal(
-            &mut signals,
-            "vite",
-            "build-tool",
-            format!("script:{script}"),
-        );
     }
     if standalone {
         add_signal(
@@ -1064,8 +537,6 @@ fn classify_technologies(
     let vite = RawViteSignals {
         direct_dependency: direct_vite,
         config_files: vite_config_files,
-        script_names: vite_script_names,
-        build_script_invokes_vite_build,
         has_index_html,
         standalone,
     };
@@ -1130,227 +601,6 @@ fn direct_dependency_evidence(manifest: &PackageManifest, wanted: &str) -> Optio
         }
     }
     None
-}
-
-fn command_invokes(script: &str, command: &str) -> bool {
-    command_occurrences(script, command).next().is_some()
-}
-
-fn command_invokes_subcommand(script: &str, command: &str, subcommand: &str) -> bool {
-    command_occurrences(script, command).any(|(tokens, command_index)| {
-        let mut index = command_index + 1;
-        while index < tokens.len() && !is_shell_operator(&tokens[index]) {
-            let token = &tokens[index];
-            if token == "--" {
-                index += 1;
-                return tokens.get(index).is_some_and(|token| token == subcommand);
-            }
-            if token.starts_with('-') {
-                if option_takes_value(command, token) && !token.contains('=') {
-                    index += 1;
-                }
-                index += 1;
-                continue;
-            }
-            return token == subcommand;
-        }
-        false
-    })
-}
-
-fn option_takes_value(command: &str, option: &str) -> bool {
-    match command {
-        "vite" => matches!(
-            option,
-            "--config" | "-c" | "--base" | "--mode" | "-m" | "--logLevel" | "--host" | "--port"
-        ),
-        "react-router" => matches!(option, "--config" | "-c" | "--mode" | "-m"),
-        _ => false,
-    }
-}
-
-fn command_occurrences<'a>(
-    script: &'a str,
-    command: &'a str,
-) -> impl Iterator<Item = (Vec<String>, usize)> + 'a {
-    split_shell_segments(script)
-        .into_iter()
-        .filter_map(move |segment| {
-            let tokens = shell_words(&segment);
-            recognized_command_index(&tokens, command).map(|index| (tokens, index))
-        })
-}
-
-fn recognized_command_index(tokens: &[String], command: &str) -> Option<usize> {
-    let mut index = 0;
-    while index < tokens.len() && is_environment_assignment(&tokens[index]) {
-        index += 1;
-    }
-    let first_executable = tokens.get(index).map(|token| executable_name(token));
-    if matches!(
-        first_executable.as_deref(),
-        Some("cross-env" | "cross-env-shell")
-    ) {
-        index += 1;
-        while index < tokens.len()
-            && (tokens[index].starts_with('-') || is_environment_assignment(&tokens[index]))
-        {
-            index += 1;
-        }
-    }
-    let executable = tokens.get(index).map(|token| executable_name(token))?;
-    if executable == command {
-        return Some(index);
-    }
-
-    match executable.as_str() {
-        "npx" | "bunx" => find_wrapped_command(tokens, index + 1, command, &[]),
-        "pnpm" | "yarn" => find_wrapped_command(tokens, index + 1, command, &["exec", "dlx", "x"]),
-        "npm" => {
-            let tail = &tokens[index + 1..];
-            if tail
-                .iter()
-                .any(|token| matches!(token.as_str(), "exec" | "x"))
-            {
-                find_wrapped_command(tokens, index + 1, command, &["exec", "x"])
-            } else {
-                None
-            }
-        }
-        "bun" => find_wrapped_command(tokens, index + 1, command, &["x"]),
-        "node" => tokens
-            .iter()
-            .enumerate()
-            .skip(index + 1)
-            .find_map(|(i, token)| {
-                let normalized = token.replace('\\', "/");
-                (normalized.contains(&format!("/{command}/"))
-                    || normalized.ends_with(&format!("/{command}")))
-                .then_some(i)
-            }),
-        _ => None,
-    }
-}
-
-fn find_wrapped_command(
-    tokens: &[String],
-    start: usize,
-    command: &str,
-    ignorable_words: &[&str],
-) -> Option<usize> {
-    tokens
-        .iter()
-        .enumerate()
-        .skip(start)
-        .find_map(|(index, token)| {
-            let executable = executable_name(token);
-            if token.starts_with('-')
-                || token == "--"
-                || ignorable_words.contains(&executable.as_str())
-                || is_environment_assignment(token)
-            {
-                None
-            } else if executable == command {
-                Some(index)
-            } else {
-                // A different executable means a wrapper such as `npm run foo`;
-                // do not treat later mentions as command execution.
-                Some(usize::MAX)
-            }
-        })
-        .filter(|index| *index != usize::MAX)
-}
-
-fn split_shell_segments(script: &str) -> Vec<String> {
-    let mut segments = Vec::new();
-    let mut current = String::new();
-    let mut single = false;
-    let mut double = false;
-    let mut escaped = false;
-    for ch in script.chars() {
-        if escaped {
-            current.push(ch);
-            escaped = false;
-            continue;
-        }
-        match ch {
-            '\\' if !single => escaped = true,
-            '\'' if !double => {
-                single = !single;
-                current.push(ch);
-            }
-            '"' if !single => {
-                double = !double;
-                current.push(ch);
-            }
-            ';' | '&' | '|' if !single && !double => {
-                if !current.trim().is_empty() {
-                    segments.push(current.trim().to_string());
-                }
-                current.clear();
-            }
-            _ => current.push(ch),
-        }
-    }
-    if !current.trim().is_empty() {
-        segments.push(current.trim().to_string());
-    }
-    segments
-}
-
-fn shell_words(segment: &str) -> Vec<String> {
-    let mut words = Vec::new();
-    let mut current = String::new();
-    let mut single = false;
-    let mut double = false;
-    let mut escaped = false;
-    for ch in segment.chars() {
-        if escaped {
-            current.push(ch);
-            escaped = false;
-            continue;
-        }
-        match ch {
-            '\\' if !single => escaped = true,
-            '\'' if !double => single = !single,
-            '"' if !single => double = !double,
-            ch if ch.is_whitespace() && !single && !double => {
-                if !current.is_empty() {
-                    words.push(std::mem::take(&mut current));
-                }
-            }
-            _ => current.push(ch),
-        }
-    }
-    if !current.is_empty() {
-        words.push(current);
-    }
-    words
-}
-
-fn executable_name(token: &str) -> String {
-    let name = token
-        .replace('\\', "/")
-        .rsplit('/')
-        .next()
-        .unwrap_or(token)
-        .to_ascii_lowercase();
-    for suffix in [".cmd", ".exe", ".ps1"] {
-        if let Some(stripped) = name.strip_suffix(suffix) {
-            return stripped.to_string();
-        }
-    }
-    name
-}
-
-fn is_environment_assignment(token: &str) -> bool {
-    token
-        .split_once('=')
-        .is_some_and(|(name, _)| !name.is_empty() && !name.contains('/'))
-}
-
-fn is_shell_operator(token: &str) -> bool {
-    matches!(token, ";" | "&" | "&&" | "|" | "||")
 }
 
 fn source_files_by_owner(
@@ -1555,30 +805,7 @@ catalog:
     }
 
     #[test]
-    fn command_detection_is_conservative_and_understands_wrappers() {
-        assert!(command_invokes_subcommand(
-            "tsc -b && vite build --mode production",
-            "vite",
-            "build"
-        ));
-        assert!(command_invokes_subcommand(
-            "cross-env NODE_ENV=production pnpm exec vite build",
-            "vite",
-            "build"
-        ));
-        assert!(command_invokes_subcommand(
-            "react-router build",
-            "react-router",
-            "build"
-        ));
-        assert!(!command_invokes("echo vite", "vite"));
-        assert!(!command_invokes("vitest run", "vite"));
-        assert!(!command_invokes("npm run build-vite", "vite"));
-        assert!(!command_invokes("yarn run vite", "vite"));
-    }
-
-    #[test]
-    fn strict_vite_and_framework_signals_are_distinct() {
+    fn vite_application_and_framework_signals_are_distinct() {
         let (manifest, errors) = parsed_manifest(
             r#"{
                 "dependencies": {
@@ -1586,14 +813,12 @@ catalog:
                     "react": "19",
                     "@inertiajs/react": "2"
                 },
-                "devDependencies": {"vite": "7"},
-                "scripts": {"build": "vite build"}
+                "devDependencies": {"vite": "7"}
             }"#,
         );
         assert!(errors.is_empty());
         let language = RawLanguageSignals::default();
-        let (signals, vite, inertia) =
-            classify_technologies(&unreadable_fileset(), "", &manifest, &[], true, &language);
+        let (signals, vite, inertia) = classify_technologies("", &manifest, &[], true, &language);
         let ids: Vec<&str> = signals.iter().map(|signal| signal.id.as_str()).collect();
         assert!(ids.contains(&"astro"));
         assert!(ids.contains(&"react"));
@@ -1699,9 +924,5 @@ catalog:
             entries.insert((*path).to_string(), source.len() as u64);
         }
         FileSet::test_local(root, entries)
-    }
-
-    fn unreadable_fileset() -> FileSet {
-        FileSet::test_local(std::path::PathBuf::new(), BTreeMap::new())
     }
 }
