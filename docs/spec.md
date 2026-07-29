@@ -326,13 +326,13 @@ application with `role="primary"` only when all of the following exist at the
 same directory:
 
 1. Vite is a direct dependency.
-2. An explicit `scripts.build` directly invokes `vite build`.
-3. A root `index.html` exists.
+2. A root `index.html` exists.
 
-Without all three, Vite may attach as supporting build tooling to an already
+Without both, Vite may attach as supporting build tooling to an already
 qualified application but must not create an application. This prevents a
 backend asset pipeline or a Vite-built library from being reported as a
-second deployable frontend.
+second deployable frontend. A `vite.config.*` file and `scripts.build` are
+optional and do not participate in application qualification.
 
 ### 6.2 Cross Inertia
 

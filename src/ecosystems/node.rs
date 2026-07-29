@@ -6,14 +6,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-mod command;
 mod manifest;
 mod workspace;
 
 use super::boundary;
 use super::runtime::{self, RuntimePin};
 use crate::fileset::FileSet;
-use command::{command_invokes, command_invokes_subcommand};
 use manifest::{parse_package_json, PackageManifest};
 use workspace::expand_workspace_patterns;
 
@@ -112,11 +110,9 @@ pub(crate) struct RawTechnologySignal {
 pub(crate) struct RawViteSignals {
     pub direct_dependency: bool,
     pub config_files: Vec<String>,
-    pub script_names: Vec<String>,
-    pub build_script_invokes_vite_build: bool,
     pub has_index_html: bool,
-    /// Deliberately strict: a direct vite dependency, an explicit `build`
-    /// script invocation of `vite build`, and same-root index.html.
+    /// A direct Vite dependency and same-root index.html distinguish a
+    /// standalone application from a Vite-powered library or asset pipeline.
     pub standalone: bool,
 }
 
@@ -516,31 +512,13 @@ fn classify_technologies(
         .filter(|path| file_name(path).starts_with("vite.config."))
         .cloned()
         .collect();
-    let vite_script_names: Vec<String> = manifest
-        .scripts
-        .iter()
-        .filter(|(_, script)| command_invokes(script, "vite"))
-        .map(|(name, _)| name.clone())
-        .collect();
-    let build_script_invokes_vite_build = manifest
-        .scripts
-        .get("build")
-        .is_some_and(|script| command_invokes_subcommand(script, "vite", "build"));
     let direct_vite = direct_vite_evidence.is_some();
-    let standalone = direct_vite && build_script_invokes_vite_build && has_index_html;
+    let standalone = direct_vite && has_index_html;
     if let Some(evidence) = direct_vite_evidence {
         add_signal(&mut signals, "vite", "build-tool", evidence);
     }
     for path in &vite_config_files {
         add_signal(&mut signals, "vite", "build-tool", format!("config:{path}"));
-    }
-    for script in &vite_script_names {
-        add_signal(
-            &mut signals,
-            "vite",
-            "build-tool",
-            format!("script:{script}"),
-        );
     }
     if standalone {
         add_signal(
@@ -559,8 +537,6 @@ fn classify_technologies(
     let vite = RawViteSignals {
         direct_dependency: direct_vite,
         config_files: vite_config_files,
-        script_names: vite_script_names,
-        build_script_invokes_vite_build,
         has_index_html,
         standalone,
     };
@@ -829,25 +805,7 @@ catalog:
     }
 
     #[test]
-    fn command_detection_is_conservative_and_understands_wrappers() {
-        assert!(command_invokes_subcommand(
-            "tsc -b && vite build --mode production",
-            "vite",
-            "build"
-        ));
-        assert!(command_invokes_subcommand(
-            "cross-env NODE_ENV=production pnpm exec vite build",
-            "vite",
-            "build"
-        ));
-        assert!(!command_invokes("echo vite", "vite"));
-        assert!(!command_invokes("vitest run", "vite"));
-        assert!(!command_invokes("npm run build-vite", "vite"));
-        assert!(!command_invokes("yarn run vite", "vite"));
-    }
-
-    #[test]
-    fn strict_vite_and_framework_signals_are_distinct() {
+    fn vite_application_and_framework_signals_are_distinct() {
         let (manifest, errors) = parsed_manifest(
             r#"{
                 "dependencies": {
@@ -855,8 +813,7 @@ catalog:
                     "react": "19",
                     "@inertiajs/react": "2"
                 },
-                "devDependencies": {"vite": "7"},
-                "scripts": {"build": "vite build"}
+                "devDependencies": {"vite": "7"}
             }"#,
         );
         assert!(errors.is_empty());

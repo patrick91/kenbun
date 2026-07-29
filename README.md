@@ -88,9 +88,8 @@ Node applications:
 
 - Next.js, Astro, Nuxt, SvelteKit, TanStack Start, SolidStart, and legacy
   Remix.
-- Standalone Vite applications, using a deliberately strict rule: the same
-  directory must directly depend on Vite, define an explicit `build` script
-  that directly invokes `vite build`, and contain `index.html`.
+- Standalone Vite applications: the same directory must directly depend on
+  Vite and contain `index.html`. A Vite config and build script are optional.
 - React, Vue, Svelte, and Solid as supporting UI-framework facts.
 
 React Router Framework Mode is not detected as an application yet.

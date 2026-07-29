@@ -145,7 +145,7 @@ def test_react_router_framework_mode_is_not_detected(tmp_path: Path) -> None:
     assert kenbun.scan(tmp_path).applications == []
 
 
-def test_strict_vite_application_and_safe_build_argv(tmp_path: Path) -> None:
+def test_vite_application_and_safe_build_argv(tmp_path: Path) -> None:
     make(
         tmp_path,
         {
@@ -169,6 +169,21 @@ def test_strict_vite_application_and_safe_build_argv(tmp_path: Path) -> None:
     payload = json.loads(result.to_json())
     assert payload["applications"][0]["dependencies"][0]["ecosystem"] == "node"
     assert payload["applications"][0]["build_scripts"][0]["command"] == "vite build"
+
+
+def test_vite_application_does_not_require_build_script_or_config(
+    tmp_path: Path,
+) -> None:
+    make(
+        tmp_path,
+        {
+            "package.json": package(dev_dependencies={"vite": "8"}),
+            "index.html": "<!doctype html>",
+        },
+    )
+    application = app(kenbun.scan(tmp_path))
+    assert technology(application, "vite").role == "primary"
+    assert application.build_scripts == []
 
 
 def test_vite_library_without_index_is_not_an_application(tmp_path: Path) -> None:
@@ -661,19 +676,14 @@ def test_official_create_vue_typescript_scaffold_is_standalone_vite(
     assert technology(app(kenbun.scan(tmp_path)), "vite").role == "primary"
 
 
-@pytest.mark.parametrize(
-    "command",
-    ["vite --mode build", "vite --config build", "vite --base build"],
-)
-def test_vite_option_values_do_not_count_as_build_subcommand(
-    tmp_path: Path, command: str
+def test_vite_config_and_build_script_do_not_replace_direct_dependency(
+    tmp_path: Path,
 ) -> None:
     make(
         tmp_path,
         {
-            "package.json": package(
-                dev_dependencies={"vite": "8"}, scripts={"build": command}
-            ),
+            "package.json": package(scripts={"build": "vite build"}),
+            "vite.config.ts": "export default {};",
             "index.html": "<!doctype html>",
         },
     )

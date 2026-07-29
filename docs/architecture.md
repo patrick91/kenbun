@@ -47,8 +47,8 @@ directly so both analysis modes retain the same behavior.
   and `ecosystems/python/entrypoint.rs` performs static FastAPI entrypoint
   resolution.
 - `ecosystems/node.rs` coordinates JavaScript/TypeScript discovery.
-  `ecosystems/node/manifest.rs`, `ecosystems/node/workspace.rs`, and
-  `ecosystems/node/command.rs` own their respective parsing concerns.
+  `ecosystems/node/manifest.rs` and `ecosystems/node/workspace.rs` own manifest
+  and workspace parsing.
 - `ecosystems/assembly.rs` is the only place that combines ecosystem facts
   into public `Application` values. It preserves same-directory enrichment and
   applies cross-ecosystem rules such as Cross Inertia.
