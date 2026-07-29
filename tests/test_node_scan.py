@@ -83,13 +83,6 @@ def technology(application: kenbun.Application, name: str) -> kenbun.Technology:
             {"vite.config.ts": "export default {}"},
             "vite build",
         ),
-        (
-            "@react-router/dev",
-            "react-router",
-            {"react": "19", "vite": "8"},
-            {"react-router.config.ts": "export default {}"},
-            "react-router build",
-        ),
         ("@solidjs/start", "solidstart", {"solid-js": "1"}, {}, "vinxi build"),
         (
             "@remix-run/dev",
@@ -132,12 +125,21 @@ def test_framework_identity(
     assert application.build_scripts[0].package_manager == "npm"
 
 
-def test_react_router_library_mode_is_not_an_application(tmp_path: Path) -> None:
+def test_react_router_framework_mode_is_not_detected(tmp_path: Path) -> None:
     make(
         tmp_path,
         {
-            "package.json": package(dependencies={"react-router": "7", "react": "19"}),
-            "src/index.js": "export {};",
+            "package.json": package(
+                dependencies={"@react-router/dev": "7", "react": "19"},
+                dev_dependencies={"vite": "8"},
+                scripts={"build": "react-router build"},
+            ),
+            "react-router.config.ts": "export default {};",
+            "vite.config.ts": (
+                'import { reactRouter } from "@react-router/dev/vite";\n'
+                "export default {plugins: [reactRouter()]};"
+            ),
+            "app/root.tsx": "export default function Root() {}",
         },
     )
     assert kenbun.scan(tmp_path).applications == []

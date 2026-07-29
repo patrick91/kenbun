@@ -28,15 +28,7 @@ const LOCKFILE_NAMES: &[(&str, &str)] = &[
     ("bun.lockb", "bun"),
 ];
 const CONFIG_EXTENSIONS: &[&str] = &["js", "mjs", "cjs", "ts", "mts", "cts"];
-const CONFIG_PREFIXES: &[&str] = &[
-    "astro",
-    "next",
-    "nuxt",
-    "svelte",
-    "vite",
-    "react-router",
-    "remix",
-];
+const CONFIG_PREFIXES: &[&str] = &["astro", "next", "nuxt", "svelte", "vite", "remix"];
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct RawNodeDiscovery {
@@ -229,7 +221,6 @@ pub(crate) fn discover(fs: &FileSet) -> RawNodeDiscovery {
             manifest,
         );
         let (technologies, vite, inertia) = classify_technologies(
-            fs,
             dir,
             manifest,
             &config_files,
@@ -476,7 +467,6 @@ fn classify_language(
 }
 
 fn classify_technologies(
-    fs: &FileSet,
     dir: &str,
     manifest: &PackageManifest,
     config_files: &[String],
@@ -518,58 +508,6 @@ fn classify_technologies(
     }
     for evidence in &language.javascript_evidence {
         add_signal(&mut signals, "javascript", "language", evidence.clone());
-    }
-
-    let react_router_dependency = direct_dependency_evidence(manifest, "@react-router/dev");
-    let react_router_configs: Vec<String> = config_files
-        .iter()
-        .filter(|path| file_name(path).starts_with("react-router.config."))
-        .cloned()
-        .collect();
-    let react_router_vite_configs: Vec<String> = config_files
-        .iter()
-        .filter(|path| file_name(path).starts_with("vite.config."))
-        .filter(|path| {
-            fs.read_str(path)
-                .is_some_and(|source| source.contains("@react-router/dev/vite"))
-        })
-        .cloned()
-        .collect();
-    let react_router_build = manifest
-        .scripts
-        .get("build")
-        .is_some_and(|script| command_invokes_subcommand(script, "react-router", "build"));
-    if let Some(dependency_evidence) = react_router_dependency {
-        if !react_router_configs.is_empty()
-            || !react_router_vite_configs.is_empty()
-            || react_router_build
-        {
-            add_signal(
-                &mut signals,
-                "react-router",
-                "framework",
-                dependency_evidence,
-            );
-            for path in react_router_configs
-                .into_iter()
-                .chain(react_router_vite_configs)
-            {
-                add_signal(
-                    &mut signals,
-                    "react-router",
-                    "framework",
-                    format!("config:{path}"),
-                );
-            }
-            if react_router_build {
-                add_signal(
-                    &mut signals,
-                    "react-router",
-                    "framework",
-                    "script:build".to_string(),
-                );
-            }
-        }
     }
 
     let direct_vite_evidence = direct_dependency_evidence(manifest, "vite");
@@ -902,11 +840,6 @@ catalog:
             "vite",
             "build"
         ));
-        assert!(command_invokes_subcommand(
-            "react-router build",
-            "react-router",
-            "build"
-        ));
         assert!(!command_invokes("echo vite", "vite"));
         assert!(!command_invokes("vitest run", "vite"));
         assert!(!command_invokes("npm run build-vite", "vite"));
@@ -928,8 +861,7 @@ catalog:
         );
         assert!(errors.is_empty());
         let language = RawLanguageSignals::default();
-        let (signals, vite, inertia) =
-            classify_technologies(&unreadable_fileset(), "", &manifest, &[], true, &language);
+        let (signals, vite, inertia) = classify_technologies("", &manifest, &[], true, &language);
         let ids: Vec<&str> = signals.iter().map(|signal| signal.id.as_str()).collect();
         assert!(ids.contains(&"astro"));
         assert!(ids.contains(&"react"));
@@ -1035,9 +967,5 @@ catalog:
             entries.insert((*path).to_string(), source.len() as u64);
         }
         FileSet::test_local(root, entries)
-    }
-
-    fn unreadable_fileset() -> FileSet {
-        FileSet::test_local(std::path::PathBuf::new(), BTreeMap::new())
     }
 }

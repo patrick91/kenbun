@@ -32,7 +32,6 @@ fn option_takes_value(command: &str, option: &str) -> bool {
             option,
             "--config" | "-c" | "--base" | "--mode" | "-m" | "--logLevel" | "--host" | "--port"
         ),
-        "react-router" => matches!(option, "--config" | "-c" | "--mode" | "-m"),
         _ => false,
     }
 }

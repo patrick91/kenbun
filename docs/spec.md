@@ -309,21 +309,15 @@ declarative dependency and script data is used.
 | `nuxt` | `nuxt` | Vue, JavaScript/TypeScript |
 | `@sveltejs/kit` | `sveltekit` | Svelte, Vite, JavaScript/TypeScript |
 | TanStack Start package | `tanstack-start` | React or Solid, Vite, TypeScript |
-| `@react-router/dev` plus config/build evidence | `react-router` | React and Vite |
 | `@solidjs/start` | `solidstart` | Solid, JavaScript/TypeScript |
 | `@remix-run/dev` | `remix` | React, JavaScript/TypeScript |
 
 These normalized technologies are primary frameworks. `react`, `vue`,
 `svelte`, and normalized `solid` are `ui-framework` technologies and normally
 supporting.
-`javascript` and `typescript` are language technologies. React Router used
-only as a routing library must not qualify an application; legacy Remix
-remains distinct from React Router Framework Mode.
-
-React Router Framework Mode specifically requires a direct `@react-router/dev`
-dependency plus at least one of: `react-router.config.*`, a Vite configuration
-containing `@react-router/dev/vite`, or a `build` script directly invoking
-`react-router build`.
+`javascript` and `typescript` are language technologies. React Router,
+including Framework Mode, does not qualify an application in v3. Legacy Remix
+remains a separately supported framework.
 
 ### 6.1 Vite boundary
 

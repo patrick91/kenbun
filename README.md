@@ -86,12 +86,14 @@ Python applications:
 
 Node applications:
 
-- Next.js, Astro, Nuxt, SvelteKit, TanStack Start, React Router Framework Mode,
-  SolidStart, and legacy Remix.
+- Next.js, Astro, Nuxt, SvelteKit, TanStack Start, SolidStart, and legacy
+  Remix.
 - Standalone Vite applications, using a deliberately strict rule: the same
   directory must directly depend on Vite, define an explicit `build` script
   that directly invokes `vite build`, and contain `index.html`.
 - React, Vue, Svelte, and Solid as supporting UI-framework facts.
+
+React Router Framework Mode is not detected as an application yet.
 
 Vite can also be supporting build tooling for another application. In
 particular, a FastAPI application using Vite for frontend assets remains one
