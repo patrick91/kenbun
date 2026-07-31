@@ -62,17 +62,33 @@ class RemoteAnalysis:
         self._max_files = max_files
         self._max_file_bytes = max_file_bytes
         self._max_depth = max_depth
+        self._round_limit_reached = False
         self._current = self._analyze()
         self._validate_current()
         self._round_number = 1 if self.file_requests else 0
 
     @property
     def file_requests(self) -> list[FileRequest]:
+        # Once the round budget is spent there is nothing more the caller can
+        # usefully fetch, so the session stops asking rather than raising. This
+        # matches `max_files` and `max_file_bytes`, which narrow the result
+        # instead of failing it.
+        if self._round_limit_reached:
+            return []
         return self._current.file_requests
 
     @property
     def round_number(self) -> int:
         return self._round_number
+
+    @property
+    def round_limit_reached(self) -> bool:
+        """Whether the session stopped because `max_rounds` was exhausted.
+
+        The result is still usable and reports `completeness="partial"`; this
+        distinguishes that from a repository that was genuinely read in full.
+        """
+        return self._round_limit_reached
 
     @property
     def result(self) -> ScanResult:
@@ -118,12 +134,11 @@ class RemoteAnalysis:
             paths = ", ".join(repeated)
             raise RuntimeError(f"Kenbun requested already resolved files: {paths}")
 
-        if self.file_requests:
-            self._round_number += 1
-            if self._round_number > self._max_rounds:
-                raise RuntimeError(
-                    f"Remote analysis did not finish within {self._max_rounds} rounds"
-                )
+        if self._current.file_requests:
+            if self._round_number >= self._max_rounds:
+                self._round_limit_reached = True
+            else:
+                self._round_number += 1
 
     def _analyze(self) -> ScanResult:
         return analyze(
@@ -138,11 +153,15 @@ class RemoteAnalysis:
         )
 
     def _validate_current(self) -> None:
-        if self._current.status == "needs_files" and not self.file_requests:
+        # Deliberately reads the raw result rather than `file_requests`: these
+        # check Kenbun's own invariants, which must not be masked by a session
+        # that has stopped requesting.
+        requests = self._current.file_requests
+        if self._current.status == "needs_files" and not requests:
             raise RuntimeError(
                 "Kenbun requested files without returning any file requests"
             )
-        if self._current.status == "complete" and self.file_requests:
+        if self._current.status == "complete" and requests:
             raise RuntimeError("Kenbun returned file requests for a complete analysis")
 
 

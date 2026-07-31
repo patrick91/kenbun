@@ -123,17 +123,61 @@ def test_remote_analysis_applies_file_count_limit_across_rounds() -> None:
     assert analysis.result.applications[0].entrypoint is None
 
 
-def test_remote_analysis_enforces_round_limit() -> None:
+def test_remote_analysis_stops_at_the_round_limit() -> None:
+    """Running out of rounds narrows the result rather than failing it, the same
+    way `max_files` and `max_file_bytes` do. What was read still describes the
+    repository, and callers should not have to choose between it and nothing."""
     files = [entry(f"packages/{index:02}/pyproject.toml") for index in range(65)]
     analysis = kenbun.remote_analysis(files, max_rounds=1)
 
-    with pytest.raises(RuntimeError, match="within 1 rounds"):
+    analysis.update(
+        {
+            request.path: b'[project]\nname = "library"\n'
+            for request in analysis.file_requests
+        }
+    )
+
+    assert analysis.round_limit_reached is True
+    assert analysis.file_requests == []
+    assert analysis.round_number == 1
+    # Reachable without re-running the analysis, and honest about being partial.
+    assert analysis.result.completeness == "partial"
+    # `status` stays "needs_files": it reports that the analysis still wanted
+    # more, which is true. The session decided to stop, and says so separately.
+    assert analysis.result.status == "needs_files"
+
+
+def test_remote_analysis_within_the_round_limit_is_complete() -> None:
+    contents = {"pyproject.toml": FASTAPI_MANIFEST, "app.py": FASTAPI_APP}
+    analysis = kenbun.remote_analysis(
+        [entry("pyproject.toml"), entry("app.py")],
+        hints={"script_patterns": ["app.py"]},
+        max_rounds=5,
+    )
+
+    while analysis.file_requests:
         analysis.update(
-            {
-                request.path: b'[project]\nname = "library"\n'
-                for request in analysis.file_requests
-            }
+            {request.path: contents[request.path] for request in analysis.file_requests}
         )
+
+    assert analysis.round_limit_reached is False
+    assert analysis.result.completeness == "complete"
+
+
+def test_a_spent_round_budget_reports_the_session_as_complete() -> None:
+    """A session that has stopped asking must not accept more content: the
+    caller has nothing left to answer."""
+    files = [entry(f"packages/{index:02}/pyproject.toml") for index in range(65)]
+    analysis = kenbun.remote_analysis(files, max_rounds=1)
+    analysis.update(
+        {
+            request.path: b'[project]\nname = "library"\n'
+            for request in analysis.file_requests
+        }
+    )
+
+    with pytest.raises(RuntimeError, match="already complete"):
+        analysis.update({})
 
 
 def test_remote_analysis_ignores_files_below_the_depth_limit() -> None:
