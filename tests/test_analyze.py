@@ -80,6 +80,17 @@ def test_analyze_applies_file_count_limit() -> None:
     assert result.file_requests == []
 
 
+def test_depth_pruned_contents_do_not_spend_the_file_budget() -> None:
+    result = kenbun.analyze(
+        [entry("pyproject.toml"), entry("vendor/a/b/pyproject.toml")],
+        {"vendor/a/b/pyproject.toml": FASTAPI_MANIFEST},
+        max_files=1,
+        max_depth=0,
+    )
+
+    assert [request.path for request in result.file_requests] == ["pyproject.toml"]
+
+
 def test_script_hints_drive_incremental_entrypoint_resolution() -> None:
     files = [entry("pyproject.toml"), entry("services/api/app.py")]
     contents = {"pyproject.toml": FASTAPI_MANIFEST}
@@ -328,6 +339,9 @@ def test_invalid_inputs_fail_loudly() -> None:
         kenbun.analyze([], hints={"script_patterns": ["../*.py"]})
     with pytest.raises(ValueError, match="positive integer"):
         kenbun.analyze([], max_file_bytes=0)
+    for max_depth in (-1, True, 1.5):
+        with pytest.raises(ValueError, match="non-negative integer or None"):
+            kenbun.analyze([], max_depth=max_depth)
     with pytest.raises(TypeError) as error:
         kenbun.analyze([], ecosystems="python")
     assert str(error.value) == (

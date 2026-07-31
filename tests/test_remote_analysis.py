@@ -136,10 +136,51 @@ def test_remote_analysis_enforces_round_limit() -> None:
         )
 
 
+def test_remote_analysis_ignores_files_below_the_depth_limit() -> None:
+    analysis = kenbun.remote_analysis(
+        [
+            entry("vendor/a/b/c/.gitignore"),
+            entry("vendor/a/b/c/pyproject.toml"),
+            entry("pyproject.toml"),
+        ],
+        max_depth=1,
+    )
+
+    assert [request.path for request in analysis.file_requests] == ["pyproject.toml"]
+
+    analysis.update({"pyproject.toml": FASTAPI_MANIFEST})
+
+    # Depth is an exclusion, not a budget that ran out. Calling it partial would
+    # mark ordinary repositories incomplete over paths that could never have
+    # held an application, drowning out the results that really are partial.
+    assert analysis.result.completeness == "complete"
+
+
+def test_remote_analysis_keeps_everything_within_the_depth_limit() -> None:
+    analysis = kenbun.remote_analysis(
+        [entry("services/api/pyproject.toml")],
+        max_depth=2,
+    )
+
+    assert [request.path for request in analysis.file_requests] == [
+        "services/api/pyproject.toml"
+    ]
+
+    analysis.update({"services/api/pyproject.toml": FASTAPI_MANIFEST})
+
+    assert analysis.result.completeness == "complete"
+
+
 @pytest.mark.parametrize("max_rounds", [0, -1, True, 1.5])
 def test_remote_analysis_requires_positive_round_limit(max_rounds: int) -> None:
     with pytest.raises(ValueError, match="positive integer"):
         kenbun.remote_analysis([], max_rounds=max_rounds)
+
+
+@pytest.mark.parametrize("max_depth", [-1, True, 1.5])
+def test_remote_analysis_requires_non_negative_depth_limit(max_depth: int) -> None:
+    with pytest.raises(ValueError, match="non-negative integer or None"):
+        kenbun.remote_analysis([], max_depth=max_depth)
 
 
 @pytest.mark.parametrize("max_files", [-1, True, 1.5])

@@ -795,7 +795,7 @@ catalog:
             ("apps/web/package.json", r#"{"dependencies":{"next":"16"}}"#),
             ("packages/lib/package.json", r#"{"name":"@fixture/lib"}"#),
         ]);
-        let walked = crate::fileset::walk_fs(&fixture.root, None, false, &[]);
+        let walked = crate::fileset::walk_fs(&fixture.root, None, false, &[], None);
         let discovery = discover(&walked);
         assert_eq!(
             discovery.workspaces[0].members,
