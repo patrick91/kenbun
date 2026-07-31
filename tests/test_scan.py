@@ -924,6 +924,29 @@ def test_scan_budget_and_external_symlink_are_bounded(tmp_path: Path) -> None:
     assert "secret-framework-name" not in payload
 
 
+def test_scan_depth_limit_prunes_nested_directories(tmp_path: Path) -> None:
+    make(
+        tmp_path,
+        {
+            "pyproject.toml": FASTAPI_PYPROJECT,
+            "main.py": APP_MAIN,
+            "vendor/a/b/c/pyproject.toml": FASTAPI_PYPROJECT,
+        },
+    )
+
+    result = kenbun.scan(tmp_path, max_depth=0)
+
+    assert [application.application_dir for application in result.applications] == ["."]
+    # Pruned like `node_modules` rather than reported as missing content.
+    assert result.completeness == "complete"
+
+
+@pytest.mark.parametrize("max_depth", [-1, True, 1.5])
+def test_scan_requires_non_negative_depth_limit(tmp_path: Path, max_depth: int) -> None:
+    with pytest.raises(ValueError, match="non-negative integer or None"):
+        kenbun.scan(tmp_path, max_depth=max_depth)
+
+
 @pytest.mark.parametrize("dependency", ["django", "flask"])
 def test_identity_frameworks_have_coverage(tmp_path: Path, dependency: str) -> None:
     make(

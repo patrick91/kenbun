@@ -22,6 +22,7 @@ class RemoteAnalysis:
         max_rounds: int = DEFAULT_MAX_ROUNDS,
         max_files: int | None = None,
         max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
+        max_depth: int | None = None,
     ) -> None:
         if (
             not isinstance(max_rounds, int)
@@ -41,6 +42,12 @@ class RemoteAnalysis:
             or max_file_bytes < 1
         ):
             raise ValueError("max_file_bytes must be a positive integer")
+        if max_depth is not None and (
+            not isinstance(max_depth, int)
+            or isinstance(max_depth, bool)
+            or max_depth < 0
+        ):
+            raise ValueError("max_depth must be a non-negative integer or None")
         if isinstance(ecosystems, str):
             raise TypeError(
                 "ecosystems must be an iterable of ecosystem names, not a string"
@@ -54,6 +61,7 @@ class RemoteAnalysis:
         self._max_rounds = max_rounds
         self._max_files = max_files
         self._max_file_bytes = max_file_bytes
+        self._max_depth = max_depth
         self._current = self._analyze()
         self._validate_current()
         self._round_number = 1 if self.file_requests else 0
@@ -126,6 +134,7 @@ class RemoteAnalysis:
             hints=self._hints,
             max_files=self._max_files,
             max_file_bytes=self._max_file_bytes,
+            max_depth=self._max_depth,
         )
 
     def _validate_current(self) -> None:
@@ -146,6 +155,7 @@ def remote_analysis(
     max_rounds: int = DEFAULT_MAX_ROUNDS,
     max_files: int | None = None,
     max_file_bytes: int = DEFAULT_MAX_FILE_BYTES,
+    max_depth: int | None = None,
 ) -> RemoteAnalysis:
     return RemoteAnalysis(
         files,
@@ -155,6 +165,7 @@ def remote_analysis(
         max_rounds=max_rounds,
         max_files=max_files,
         max_file_bytes=max_file_bytes,
+        max_depth=max_depth,
     )
 
 

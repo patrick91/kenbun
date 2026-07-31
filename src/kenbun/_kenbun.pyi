@@ -142,6 +142,7 @@ def scan(
     max_files: int | None = None,
     follow_symlinks: bool = False,
     extra_ignore_files: list[str] | None = None,
+    max_depth: int | None = None,
 ) -> ScanResult: ...
 def analyze(
     files: Iterable[FileEntry],
@@ -152,4 +153,5 @@ def analyze(
     hints: AnalysisHints | None = None,
     max_files: int | None = None,
     max_file_bytes: int = 2 * 1024 * 1024,
+    max_depth: int | None = None,
 ) -> ScanResult: ...

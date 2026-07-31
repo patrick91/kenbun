@@ -21,7 +21,7 @@ unsafe extern "C" {
 /// Statically analyze a directory: find applications, technologies,
 /// entrypoints, build facts, and problems without executing user code.
 #[pyfunction]
-#[pyo3(name = "scan", signature = (root, *, ecosystems=None, application_dir=None, entrypoint=None, max_files=None, follow_symlinks=false, extra_ignore_files=None))]
+#[pyo3(name = "scan", signature = (root, *, ecosystems=None, application_dir=None, entrypoint=None, max_files=None, follow_symlinks=false, extra_ignore_files=None, max_depth=None))]
 #[expect(clippy::too_many_arguments, reason = "mirrors the Python API")]
 fn scan_py(
     py: Python<'_>,
@@ -32,7 +32,9 @@ fn scan_py(
     max_files: Option<u64>,
     follow_symlinks: bool,
     extra_ignore_files: Option<Vec<String>>,
+    max_depth: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<ScanResult> {
+    let max_depth = extract_max_depth(max_depth)?;
     let ecosystems = extract_ecosystems(ecosystems)?;
     if !ecosystems.python && entrypoint.is_some() {
         return Err(PyValueError::new_err(
@@ -46,6 +48,7 @@ fn scan_py(
         max_files,
         follow_symlinks,
         extra_ignore_files: extra_ignore_files.unwrap_or_default(),
+        max_depth,
     };
     // Release the GIL: scans are pure Rust and may run in parallel threads.
     Ok(py.detach(|| scan::scan(&root, &opts)))
@@ -54,7 +57,7 @@ fn scan_py(
 /// Analyze a caller-provided repository inventory without filesystem or
 /// network access. Missing contents are returned as ordered file requests.
 #[pyfunction]
-#[pyo3(signature = (files, contents=None, *, ecosystems=None, inventory_complete=true, hints=None, max_files=None, max_file_bytes=2_097_152))]
+#[pyo3(signature = (files, contents=None, *, ecosystems=None, inventory_complete=true, hints=None, max_files=None, max_file_bytes=2_097_152, max_depth=None))]
 #[expect(clippy::too_many_arguments, reason = "mirrors the Python API")]
 fn analyze(
     py: Python<'_>,
@@ -65,12 +68,14 @@ fn analyze(
     hints: Option<BTreeMap<String, Vec<String>>>,
     max_files: Option<u64>,
     max_file_bytes: u64,
+    max_depth: Option<&Bound<'_, PyAny>>,
 ) -> PyResult<ScanResult> {
     if max_file_bytes == 0 {
         return Err(PyValueError::new_err(
             "max_file_bytes must be a positive integer",
         ));
     }
+    let max_depth = extract_max_depth(max_depth)?;
     let entries = files
         .try_iter()?
         .enumerate()
@@ -123,10 +128,26 @@ fn analyze(
         script_patterns,
         max_files,
         max_file_bytes,
+        max_depth,
     )
     .map_err(PyValueError::new_err)?;
     let ecosystems = extract_ecosystems(ecosystems)?;
     Ok(py.detach(|| scan::analyze(&fs, inventory_complete, ecosystems)))
+}
+
+fn extract_max_depth(value: Option<&Bound<'_, PyAny>>) -> PyResult<Option<u64>> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    if value.is_instance_of::<PyBool>() {
+        return Err(PyValueError::new_err(
+            "max_depth must be a non-negative integer or None",
+        ));
+    }
+    value
+        .extract::<u64>()
+        .map(Some)
+        .map_err(|_| PyValueError::new_err("max_depth must be a non-negative integer or None"))
 }
 
 /// Validate Python's flexible iterable input at the public boundary.

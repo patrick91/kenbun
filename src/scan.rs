@@ -30,6 +30,7 @@ pub struct ScanOptions {
     pub max_files: Option<u64>,
     pub follow_symlinks: bool,
     pub extra_ignore_files: Vec<String>,
+    pub max_depth: Option<u64>,
 }
 
 pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
@@ -39,6 +40,7 @@ pub fn scan(root: &Path, opts: &ScanOptions) -> ScanResult {
         opts.max_files,
         opts.follow_symlinks,
         &opts.extra_ignore_files,
+        opts.max_depth,
     );
     let mut result = scan_fileset(
         &fs,
@@ -65,6 +67,7 @@ pub fn analyze(
         max_files: None,
         follow_symlinks: false,
         extra_ignore_files: Vec::new(),
+        max_depth: None,
     };
     if fs.has_ignore_requests() {
         return finish_virtual_result(

@@ -63,6 +63,7 @@ pub struct FileSet {
     pub root: PathBuf,
     /// Relative `/`-separated path to size; BTreeMap preserves byte ordering.
     pub files: BTreeMap<String, u64>,
+    /// Set when the `max_files` budget ran out mid-walk.
     pub truncated: bool,
     /// Filesystem entries omitted from the scan, with a stable display path
     /// and the underlying reason.
@@ -82,6 +83,7 @@ struct VirtualSource {
     contents: BTreeMap<String, Option<Vec<u8>>>,
     max_files: Option<u64>,
     max_file_bytes: u64,
+    max_depth: Option<u64>,
     script_patterns: Vec<ScriptPattern>,
     script_hints_enabled: AtomicBool,
     allowed_scripts: Mutex<BTreeSet<String>>,
@@ -309,9 +311,14 @@ impl FileSet {
         } else {
             MAX_REQUESTS_PER_ROUND
         };
+        let provided_files = source
+            .contents
+            .keys()
+            .filter(|path| !exceeds_max_depth(path, source.max_depth))
+            .count() as u64;
         let remaining_files = source
             .max_files
-            .map(|limit| limit.saturating_sub(source.contents.len() as u64))
+            .map(|limit| limit.saturating_sub(provided_files))
             .unwrap_or(u64::MAX);
         if remaining_files == 0 {
             self.mark_unavailable();
@@ -403,12 +410,22 @@ fn is_excluded_dir(path: &Path) -> bool {
     false
 }
 
+/// Directories above a file: `main.py` is 0, `app/main.py` is 1. Applications
+/// live near the top of a repository, so paths below the limit cannot hold one.
+/// This is an exclusion in the same family as `node_modules` and `.venv`, not a
+/// budget running out, so it does not make a result partial: saying otherwise
+/// would mark ordinary repositories incomplete for files that never mattered.
+fn exceeds_max_depth(path: &str, max_depth: Option<u64>) -> bool {
+    max_depth.is_some_and(|limit| path.matches('/').count() as u64 > limit)
+}
+
 pub fn virtual_files(
     entries: Vec<(String, u64)>,
     contents: BTreeMap<String, Option<Vec<u8>>>,
     script_patterns: Vec<String>,
     max_files: Option<u64>,
     max_file_bytes: u64,
+    max_depth: Option<u64>,
 ) -> Result<FileSet, String> {
     let mut all_entries = BTreeMap::new();
     for (path, size) in entries {
@@ -454,6 +471,7 @@ pub fn virtual_files(
     for path in all_entries
         .keys()
         .filter(|path| path.rsplit('/').next() == Some(".gitignore"))
+        .filter(|path| !exceeds_max_depth(path, max_depth))
     {
         if all_entries[path] > max_file_bytes {
             unavailable_seen = true;
@@ -532,7 +550,9 @@ pub fn virtual_files(
     let files = all_entries
         .into_iter()
         .filter(|(path, _)| {
-            !is_builtin_excluded(path, &all_paths) && !is_ignored(path, &ignore_matchers)
+            !is_builtin_excluded(path, &all_paths)
+                && !is_ignored(path, &ignore_matchers)
+                && !exceeds_max_depth(path, max_depth)
         })
         .collect();
 
@@ -546,6 +566,7 @@ pub fn virtual_files(
             contents,
             max_files,
             max_file_bytes,
+            max_depth,
             script_patterns: compiled_patterns,
             script_hints_enabled: AtomicBool::new(false),
             allowed_scripts: Mutex::new(BTreeSet::new()),
@@ -613,6 +634,7 @@ pub fn walk_fs(
     max_files: Option<u64>,
     follow_symlinks: bool,
     extra_ignore_files: &[String],
+    max_depth: Option<u64>,
 ) -> FileSet {
     let mut files = BTreeMap::new();
     let mut truncated = false;
@@ -637,6 +659,7 @@ pub fn walk_fs(
 
     let mut builder = ignore::WalkBuilder::new(root);
     let containment_root = canonical_root.clone();
+    let walk_root = root.to_path_buf();
     builder
         .hidden(false) // dotfiles like .python-version matter
         .ignore(false) // `.ignore` is not part of the documented upload set
@@ -656,11 +679,15 @@ pub fn walk_fs(
             {
                 return false;
             }
-            if entry.file_type().is_some_and(|t| t.is_dir()) {
-                !is_excluded_dir(entry.path())
-            } else {
-                true
+            if !entry.file_type().is_some_and(|t| t.is_dir()) {
+                return true;
             }
+            if is_excluded_dir(entry.path()) {
+                return false;
+            }
+            !entry.path().strip_prefix(&walk_root).is_ok_and(|relative| {
+                max_depth.is_some_and(|limit| relative.components().count() as u64 > limit)
+            })
         });
     for name in extra_ignore_files {
         builder.add_custom_ignore_filename(name);
@@ -698,6 +725,9 @@ pub fn walk_fs(
             continue;
         };
         let rel_str = rel_str.replace(std::path::MAIN_SEPARATOR, "/");
+        if exceeds_max_depth(&rel_str, max_depth) {
+            continue;
+        }
         if follow_symlinks
             && canonical_root.as_ref().is_some_and(|canonical_root| {
                 std::fs::canonicalize(entry.path())
@@ -731,7 +761,6 @@ pub fn walk_fs(
         }
         files.insert(rel_str, size);
     }
-
     FileSet {
         root: root.to_path_buf(),
         files,
@@ -747,6 +776,47 @@ mod tests {
     use super::*;
     use std::sync::atomic::{AtomicU64, Ordering};
 
+    fn depth_limited(paths: &[&str], max_depth: Option<u64>) -> FileSet {
+        virtual_files(
+            paths.iter().map(|path| ((*path).to_string(), 10)).collect(),
+            BTreeMap::new(),
+            Vec::new(),
+            None,
+            1024,
+            max_depth,
+        )
+        .expect("inventory is valid")
+    }
+
+    #[test]
+    fn max_depth_counts_directories_above_the_file() {
+        let paths = ["main.py", "app/main.py", "a/b/main.py", "a/b/c/main.py"];
+
+        let unlimited = depth_limited(&paths, None);
+        assert_eq!(unlimited.files.len(), 4);
+        assert!(!unlimited.truncated);
+
+        let flat = depth_limited(&paths, Some(0));
+        assert_eq!(flat.files.keys().collect::<Vec<_>>(), vec!["main.py"]);
+
+        let nested = depth_limited(&paths, Some(2));
+        assert_eq!(
+            nested.files.keys().collect::<Vec<_>>(),
+            vec!["a/b/main.py", "app/main.py", "main.py"]
+        );
+    }
+
+    #[test]
+    fn depth_pruning_does_not_make_a_scan_partial() {
+        // Depth is a statement about where applications live, like the
+        // `node_modules` exclusion, not a budget running out. Reporting it as
+        // truncation would mark ordinary repositories incomplete over files
+        // that could never have held an application.
+        let pruned = depth_limited(&["a/b/main.py"], Some(0));
+        assert!(pruned.files.is_empty());
+        assert!(!pruned.truncated);
+    }
+
     #[test]
     fn scan_root_does_not_inherit_parent_gitignore_rules() {
         static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
@@ -761,7 +831,7 @@ mod tests {
         std::fs::write(root.join("packages/lib/package.json"), "{}\n")
             .expect("write nested manifest");
 
-        let files = walk_fs(&root, None, false, &[]);
+        let files = walk_fs(&root, None, false, &[], None);
         assert!(files.contains("packages/lib/package.json"));
         let _ = std::fs::remove_dir_all(parent);
     }
@@ -779,7 +849,7 @@ mod tests {
         let invalid = OsString::from_vec(vec![b'f', b'o', 0x80]);
         std::fs::write(root.join(invalid), b"data").expect("write non-UTF-8 fixture");
 
-        let files = walk_fs(&root, None, false, &[]);
+        let files = walk_fs(&root, None, false, &[], None);
         assert!(files.files.is_empty());
         assert!(files
             .issues

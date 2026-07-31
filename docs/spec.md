@@ -37,6 +37,7 @@ def scan(
     max_files: int | None = None,
     follow_symlinks: bool = False,
     extra_ignore_files: list[str] | None = None,
+    max_depth: int | None = None,
 ) -> ScanResult: ...
 ```
 
@@ -64,7 +65,14 @@ by the FastAPI resolver. It is validated against statically parsed source and
 therefore requires the Python ecosystem.
 
 `max_files` bounds the filesystem walk. Exceeding it returns the partial facts
-with `KB802`. Symlinks are not followed unless `follow_symlinks=True`; when
+with `KB802`. `max_depth` bounds how many directories may sit above a file:
+`main.py` is depth 0 and `app/main.py` is depth 1, so `max_depth=1` keeps both.
+Local scans do not walk directories that can only contain deeper files. Content
+beyond the limit is excluded in the same way as `node_modules` or `.venv`, so it
+does not affect `completeness`: the limit states where applications can live
+rather than admitting the scan ran out of budget. `None` means unlimited.
+
+Symlinks are not followed unless `follow_symlinks=True`; when
 enabled, targets outside the scan root are still excluded. `.gitignore` is
 honored, while ripgrep-specific `.ignore` files are not implicit scan inputs.
 `extra_ignore_files` lets a caller apply deployment-specific ignore files in
@@ -93,6 +101,7 @@ def remote_analysis(
     max_rounds: int = 20,
     max_files: int | None = None,
     max_file_bytes: int = 2 * 1024 * 1024,
+    max_depth: int | None = None,
 ) -> RemoteAnalysis: ...
 
 def analyze(
@@ -104,6 +113,7 @@ def analyze(
     hints: AnalysisHints | None = None,
     max_files: int | None = None,
     max_file_bytes: int = 2 * 1024 * 1024,
+    max_depth: int | None = None,
 ) -> ScanResult: ...
 ```
 
@@ -117,7 +127,9 @@ requested again. `max_files` bounds how many missing file contents can be
 requested; entries already present in `contents` consume that budget. Once
 exhausted, later reads are treated as unavailable. `max_file_bytes` configures
 the per-file parse cap used by both the stateless primitive and remote session.
-Oversized stateless contents are treated as unavailable.
+Oversized stateless contents are treated as unavailable. `max_depth` has the
+same meaning as in `scan()`: inventory entries below the limit are excluded, so
+they are never requested and do not affect `completeness`.
 
 `ecosystems` has the same semantics as `scan()`. It limits manifest and source
 requests as well as the returned facts. `RemoteAnalysis` snapshots the

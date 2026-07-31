@@ -493,7 +493,7 @@ mod tests {
             }
             std::fs::write(target, source).expect("write fixture");
         }
-        crate::fileset::walk_fs(&root, None, false, &[])
+        crate::fileset::walk_fs(&root, None, false, &[], None)
     }
 
     #[test]
