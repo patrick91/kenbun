@@ -140,8 +140,21 @@ across analysis rounds.
 `file_requests` property contains the current ordered `list[FileRequest]`.
 `update()` requires one `bytes | None` response for every request, rejects
 oversized contents using their actual length, accumulates the response, and
-advances the analysis. `result` is available only after completion. The session
-owns file and round limits, progress validation, and the accumulated contents.
+advances the analysis. `result` is available once the session stops requesting
+files. The session owns file and round limits, progress validation, and the
+accumulated contents.
+
+`max_rounds` bounds how many exchanges a session will ask for. Exhausting it
+ends the session rather than raising: `file_requests` becomes empty,
+`round_limit_reached` becomes `True`, and `result` reports
+`completeness="partial"`. This matches `max_files` and `max_file_bytes`, which
+narrow a result rather than failing it, and means the facts gathered so far stay
+available instead of being discarded. The result's `status` still reports
+`needs_files`, because the analysis genuinely wanted more content; the session's
+decision to stop is reported separately by `round_limit_reached`.
+
+A `RuntimeError` from `update()` therefore always signals a broken invariant
+rather than an exhausted budget, and callers should not catch it.
 
 `analyze()` is pure and stateless. A caller repeats the call with accumulated
 contents until `status="complete"`. Every unresolved path is requested at
