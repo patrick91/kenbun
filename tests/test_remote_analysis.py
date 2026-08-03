@@ -11,8 +11,16 @@ dependencies = ["fastapi"]
 FASTAPI_APP = b"from fastapi import FastAPI\napp = FastAPI()\n"
 
 
-def entry(path: str, *, size: int | None = None) -> kenbun.FileEntry:
-    return kenbun.FileEntry(path=path, size=size)
+def entry(
+    path: str,
+    *,
+    size: int | None = None,
+    is_symlink: bool = False,
+) -> kenbun.FileEntry:
+    file_entry = kenbun.FileEntry(path=path, size=size)
+    if is_symlink:
+        file_entry["is_symlink"] = True
+    return file_entry
 
 
 def test_remote_analysis_drives_incremental_analysis() -> None:
@@ -51,6 +59,27 @@ def test_remote_analysis_preserves_selected_ecosystems_across_rounds() -> None:
     application = analysis.result.applications[0]
     assert {item.ecosystem for item in application.dependencies} == {"python"}
     assert application.node is None
+
+
+def test_remote_analysis_never_requests_symlinks() -> None:
+    analysis = kenbun.remote_analysis(
+        [
+            entry(".gitignore", is_symlink=True),
+            entry("services/api/pyproject.toml"),
+            entry("services/api/app.py", is_symlink=True),
+        ],
+        hints={"script_patterns": ["app.py"]},
+    )
+
+    assert [request.path for request in analysis.file_requests] == [
+        "services/api/pyproject.toml"
+    ]
+
+    analysis.update({"services/api/pyproject.toml": FASTAPI_MANIFEST})
+
+    assert analysis.file_requests == []
+    assert analysis.result.completeness == "complete"
+    assert analysis.result.applications[0].entrypoint is None
 
 
 def test_remote_analysis_accepts_unavailable_content() -> None:

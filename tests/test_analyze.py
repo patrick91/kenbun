@@ -13,8 +13,16 @@ dependencies = ["fastapi"]
 FASTAPI_APP = b"from fastapi import FastAPI\napp = FastAPI()\n"
 
 
-def entry(path: str, *, size: int | None = None) -> kenbun.FileEntry:
-    return kenbun.FileEntry(path=path, size=size)
+def entry(
+    path: str,
+    *,
+    size: int | None = None,
+    is_symlink: bool = False,
+) -> kenbun.FileEntry:
+    file_entry = kenbun.FileEntry(path=path, size=size)
+    if is_symlink:
+        file_entry["is_symlink"] = True
+    return file_entry
 
 
 def test_manifest_only_pass_does_not_request_scripts() -> None:
@@ -44,6 +52,43 @@ def test_analyze_accepts_generic_iterables_and_mappings() -> None:
 
     assert result.status == "complete"
     assert result.applications[0].name == "demo"
+
+
+def test_analyze_ignores_symlink_paths_and_contents() -> None:
+    result = kenbun.analyze(
+        [
+            entry(".gitignore", is_symlink=True),
+            entry("pyproject.toml", is_symlink=True),
+            entry("package-lock.json", is_symlink=True),
+            entry("index.html", is_symlink=True),
+        ],
+        {
+            ".gitignore": b"pyproject.toml\n",
+            "pyproject.toml": FASTAPI_MANIFEST,
+            "package-lock.json": b"{}",
+            "index.html": b"<html></html>",
+        },
+        max_file_bytes=1,
+    )
+
+    assert result.status == "complete"
+    assert result.completeness == "complete"
+    assert result.file_requests == []
+    assert result.applications == []
+    assert result.workspace is None
+
+
+def test_symlink_contents_do_not_consume_the_file_budget() -> None:
+    result = kenbun.analyze(
+        [
+            entry("linked.txt", is_symlink=True),
+            entry("pyproject.toml"),
+        ],
+        {"linked.txt": b"target.txt"},
+        max_files=1,
+    )
+
+    assert [request.path for request in result.file_requests] == ["pyproject.toml"]
 
 
 def test_analyze_applies_custom_file_limit() -> None:
@@ -331,6 +376,24 @@ def test_invalid_inputs_fail_loudly() -> None:
     for size in (-1, True, 1.5):
         with pytest.raises(TypeError, match=r"files\[0\]\.size must be"):
             kenbun.analyze([{"path": "pyproject.toml", "size": size}])
+    for is_symlink in (None, 0, 1, "yes"):
+        with pytest.raises(TypeError, match=r"files\[0\]\.is_symlink must be a bool"):
+            kenbun.analyze(
+                [
+                    {
+                        "path": "pyproject.toml",
+                        "size": 64,
+                        "is_symlink": is_symlink,
+                    }
+                ]
+            )
+    with pytest.raises(ValueError, match="duplicate file inventory path"):
+        kenbun.analyze(
+            [
+                entry("pyproject.toml"),
+                entry("pyproject.toml", is_symlink=True),
+            ]
+        )
     with pytest.raises(ValueError, match="repository-relative"):
         kenbun.analyze([entry("../pyproject.toml")])
     with pytest.raises(ValueError, match="unknown analysis hint"):
