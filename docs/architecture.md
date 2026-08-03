@@ -32,7 +32,9 @@ Python projects               raw Node facts
 `FileSet` is the shared input abstraction. Local scans populate it by walking a
 filesystem; remote analysis populates it from an inventory and requested
 contents. Detectors must use `FileSet` rather than reading repository paths
-directly so both analysis modes retain the same behavior.
+directly so both analysis modes retain the same behavior. Remote symlink
+entries are validated and removed before `FileSet` construction, matching a
+local scan with `follow_symlinks=False`.
 
 ## Module ownership
 

@@ -91,6 +91,7 @@ class AnalysisHints(TypedDict, total=False):
 class FileEntry(TypedDict):
     path: str
     size: int | None
+    is_symlink: NotRequired[bool]
 
 def remote_analysis(
     files: Iterable[FileEntry],
@@ -118,18 +119,23 @@ def analyze(
 ```
 
 `files` contains normalized repository-relative POSIX paths and optional
-repository-reported sizes. Kenbun treats entries known to exceed
-`max_file_bytes` as unavailable without requesting their contents. Unknown
-sizes remain requestable. Transport metadata such as blob identifiers belongs
-to the caller. A path omitted from `contents` has not been fetched. `None`
-means the caller cannot provide the content and prevents that path from being
-requested again. `max_files` bounds how many missing file contents can be
-requested; entries already present in `contents` consume that budget. Once
-exhausted, later reads are treated as unavailable. `max_file_bytes` configures
-the per-file parse cap used by both the stateless primitive and remote session.
-Oversized stateless contents are treated as unavailable. `max_depth` has the
-same meaning as in `scan()`: inventory entries below the limit are excluded, so
-they are never requested and do not affect `completeness`.
+repository-reported sizes. `is_symlink` defaults to `False`; marked entries are
+validated but excluded from analysis, never requested or followed, and do not
+affect completeness or file budgets. Any supplied link-target contents are
+ignored. This matches local scans with `follow_symlinks=False`.
+
+Kenbun treats entries known to exceed `max_file_bytes` as unavailable without
+requesting their contents. Unknown sizes remain requestable. Transport metadata
+such as blob identifiers belongs to the caller. A path omitted from `contents`
+has not been fetched. `None` means the caller cannot provide the content and
+prevents that path from being requested again. `max_files` bounds how many
+missing file contents can be requested; entries already present in `contents`
+consume that budget. Once exhausted, later reads are treated as unavailable.
+`max_file_bytes` configures the per-file parse cap used by both the stateless
+primitive and remote session. Oversized stateless contents are treated as
+unavailable. `max_depth` has the same meaning as in `scan()`: inventory entries
+below the limit are excluded, so they are never requested and do not affect
+`completeness`.
 
 `ecosystems` has the same semantics as `scan()`. It limits manifest and source
 requests as well as the returned facts. `RemoteAnalysis` snapshots the

@@ -420,28 +420,36 @@ fn exceeds_max_depth(path: &str, max_depth: Option<u64>) -> bool {
 }
 
 pub fn virtual_files(
-    entries: Vec<(String, u64)>,
-    contents: BTreeMap<String, Option<Vec<u8>>>,
+    entries: Vec<(String, u64, bool)>,
+    mut contents: BTreeMap<String, Option<Vec<u8>>>,
     script_patterns: Vec<String>,
     max_files: Option<u64>,
     max_file_bytes: u64,
     max_depth: Option<u64>,
 ) -> Result<FileSet, String> {
+    let mut inventory_symlinks = BTreeMap::new();
     let mut all_entries = BTreeMap::new();
-    for (path, size) in entries {
+    for (path, size, is_symlink) in entries {
         validate_relative_path(&path)?;
-        if all_entries.insert(path.clone(), size).is_some() {
+        if inventory_symlinks
+            .insert(path.clone(), is_symlink)
+            .is_some()
+        {
             return Err(format!("duplicate file inventory path: {path}"));
+        }
+        if !is_symlink {
+            all_entries.insert(path, size);
         }
     }
     for path in contents.keys() {
         validate_relative_path(path)?;
-        if !all_entries.contains_key(path) {
+        if !inventory_symlinks.contains_key(path) {
             return Err(format!(
                 "content path is not present in the inventory: {path}"
             ));
         }
     }
+    contents.retain(|path, _| !inventory_symlinks[path]);
 
     let mut compiled_patterns = Vec::new();
     let mut seen_patterns = BTreeSet::new();
@@ -778,7 +786,10 @@ mod tests {
 
     fn depth_limited(paths: &[&str], max_depth: Option<u64>) -> FileSet {
         virtual_files(
-            paths.iter().map(|path| ((*path).to_string(), 10)).collect(),
+            paths
+                .iter()
+                .map(|path| ((*path).to_string(), 10, false))
+                .collect(),
             BTreeMap::new(),
             Vec::new(),
             None,

@@ -43,6 +43,7 @@ contents into a stateful analysis:
 files: list[kenbun.FileEntry] = [
     kenbun.FileEntry(path="pyproject.toml", size=128),
     kenbun.FileEntry(path="app.py", size=512),
+    kenbun.FileEntry(path="current", size=3, is_symlink=True),
 ]
 analysis = kenbun.remote_analysis(
     files,
@@ -67,14 +68,17 @@ contribute applications, facts, or diagnostics. `None` keeps the default of
 analyzing both ecosystems.
 
 Each `FileEntry` contains a path and its repository-reported size, or `None`
-when the size is unknown. Kenbun does not request entries known to exceed
-`max_file_bytes` and still validates the actual content supplied to `update()`.
-Each `FileRequest` contains a path, reason, and priority. `max_files` bounds
-requested file contents across every analysis round. The caller owns remaining
-transport-specific metadata and returns `bytes` or `None` for every requested
-path. `scan()` walks a real directory; `analyze()` remains the pure, stateless
-primitive beneath `remote_analysis()`. Both analysis modes produce schema v3
-`ScanResult` objects with deterministic ordering and canonical JSON.
+when the size is unknown. Set `is_symlink=True` for symbolic links; Kenbun
+validates their metadata but never requests, parses, or follows them. The flag
+defaults to `False` for inventories that already contain only regular files.
+Kenbun does not request entries known to exceed `max_file_bytes` and still
+validates the actual content supplied to `update()`. Each `FileRequest` contains
+a path, reason, and priority. `max_files` bounds requested file contents across
+every analysis round. The caller owns remaining transport-specific metadata and
+returns `bytes` or `None` for every requested path. `scan()` walks a real
+directory; `analyze()` remains the pure, stateless primitive beneath
+`remote_analysis()`. Both analysis modes produce schema v3 `ScanResult` objects
+with deterministic ordering and canonical JSON.
 
 ## Supported detection
 

@@ -7,7 +7,7 @@ mod scan;
 use std::collections::BTreeMap;
 use std::path::PathBuf;
 
-use pyo3::exceptions::{PyTypeError, PyValueError};
+use pyo3::exceptions::{PyKeyError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyString};
 
@@ -105,7 +105,21 @@ fn analyze(
                     ))
                 })?
             };
-            Ok((path, size))
+            let is_symlink = match entry.get_item("is_symlink") {
+                Ok(value) if value.is_instance_of::<PyBool>() => {
+                    value.extract::<bool>().map_err(|_| {
+                        PyTypeError::new_err(format!("files[{index}].is_symlink must be a bool"))
+                    })?
+                }
+                Ok(_) => {
+                    return Err(PyTypeError::new_err(format!(
+                        "files[{index}].is_symlink must be a bool"
+                    )));
+                }
+                Err(error) if error.is_instance_of::<PyKeyError>(py) => false,
+                Err(error) => return Err(error),
+            };
+            Ok((path, size, is_symlink))
         })
         .collect::<PyResult<Vec<_>>>()?;
     let mut extracted_contents = BTreeMap::new();
