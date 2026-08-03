@@ -19,7 +19,7 @@ keywords = [
 authors = [
     {name = "Patrick Arminio", email = "patrick.arminio@gmail.com"},
 ]
-dependencies = []
+dependencies = ["typing-extensions>=4.0.0"]
 readme = "README.md"
 license = "MIT"
 
