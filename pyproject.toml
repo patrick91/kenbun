@@ -28,7 +28,7 @@ Repository = "https://github.com/patrick91/kenbun"
 Issues = "https://github.com/patrick91/kenbun/issues"
 
 [build-system]
-requires = ["maturin>=1.9.6,<2.0"]
+requires = ["maturin>=1.14.1,<2.0"]
 build-backend = "maturin"
 
 [tool.maturin]
@@ -50,7 +50,7 @@ plugins = [
 [dependency-groups]
 dev = [
     "pytest>=8.2.2",
-    "maturin>=1.9.6",
+    "maturin>=1.14.1",
     "pytest-cov",
     "coverage",
     "ruff>=0.12",
