@@ -1,3 +1,12 @@
+0.9.2 - 2026-08-06
+------------------
+
+This release adds CodSpeed performance tracking for repository analysis.
+
+- Benchmark generated scale scenarios and representative fixture repositories,
+  including a mixed Python and Node workspace with multiple frameworks.
+- Run the benchmark workflow on Python 3.14 using deterministic CPU simulation.
+
 0.9.1 - 2026-08-04
 ------------------
 
