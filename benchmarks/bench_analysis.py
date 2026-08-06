@@ -1,14 +1,8 @@
-from __future__ import annotations
-
 from collections.abc import Mapping
-from pathlib import Path
-
-import pytest
 
 import kenbun
 
 FASTAPI_APP = b"from fastapi import FastAPI\napp = FastAPI()\n"
-FIXTURES = Path(__file__).parent / "fixtures"
 Repository = tuple[list[kenbun.FileEntry], dict[str, bytes]]
 
 
@@ -21,17 +15,6 @@ def repository(
         for path, source in ordered_contents.items()
     ]
     return files, ordered_contents
-
-
-def repository_fixture(name: str) -> Repository:
-    root = FIXTURES / name
-    return repository(
-        {
-            path.relative_to(root).as_posix(): path.read_bytes()
-            for path in root.rglob("*")
-            if path.is_file()
-        }
-    )
 
 
 def framework_manifest(name: str, dependency: str) -> bytes:
@@ -83,16 +66,6 @@ FASTAPI_FALLBACK = repository(
         "src/package_zz/main.py": FASTAPI_APP,
     }
 )
-
-
-@pytest.fixture(scope="session")
-def fastapi_service_fixture() -> Repository:
-    return repository_fixture("fastapi_service")
-
-
-@pytest.fixture(scope="session")
-def complex_workspace_fixture() -> Repository:
-    return repository_fixture("complex_workspace")
 
 
 def test_analyze_single_fastapi_application(benchmark) -> None:
