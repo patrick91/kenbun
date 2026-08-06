@@ -6,6 +6,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+mod frameworks;
 mod manifest;
 mod workspace;
 
@@ -26,7 +27,8 @@ const LOCKFILE_NAMES: &[(&str, &str)] = &[
     ("bun.lockb", "bun"),
 ];
 const CONFIG_EXTENSIONS: &[&str] = &["js", "mjs", "cjs", "ts", "mts", "cts"];
-const CONFIG_PREFIXES: &[&str] = &["astro", "next", "nuxt", "svelte", "vite", "remix"];
+
+type TechnologySignals = BTreeMap<String, (String, BTreeSet<String>)>;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub(crate) struct RawNodeDiscovery {
@@ -291,12 +293,11 @@ fn same_root_config_files(fs: &FileSet, dir: &str) -> Vec<String> {
     for path in direct_files(fs, dir) {
         let name = path.rsplit('/').next().unwrap_or(&path);
         let language_config = name == "tsconfig.json" || name == "jsconfig.json";
-        let framework_config = CONFIG_PREFIXES.iter().any(|prefix| {
-            CONFIG_EXTENSIONS
-                .iter()
-                .any(|extension| name == format!("{prefix}.config.{extension}"))
-        });
-        if language_config || framework_config {
+        let framework_config = frameworks::is_config_file(name);
+        let vite_config = CONFIG_EXTENSIONS
+            .iter()
+            .any(|extension| name == format!("vite.config.{extension}"));
+        if language_config || framework_config || vite_config {
             out.push(path);
         }
     }
@@ -469,30 +470,9 @@ fn classify_technologies(
     has_index_html: bool,
     language: &RawLanguageSignals,
 ) -> (Vec<RawTechnologySignal>, RawViteSignals, RawInertiaSignals) {
-    let mut signals: BTreeMap<String, (String, BTreeSet<String>)> = BTreeMap::new();
+    let mut signals = TechnologySignals::new();
 
-    for (id, package) in [
-        ("nextjs", "next"),
-        ("astro", "astro"),
-        ("nuxt", "nuxt"),
-        ("sveltekit", "@sveltejs/kit"),
-        ("solidstart", "@solidjs/start"),
-        ("remix", "@remix-run/dev"),
-    ] {
-        if let Some(evidence) = direct_dependency_evidence(manifest, package) {
-            add_signal(&mut signals, id, "framework", evidence);
-        }
-    }
-
-    for package in [
-        "@tanstack/react-start",
-        "@tanstack/solid-start",
-        "@tanstack/start",
-    ] {
-        if let Some(evidence) = direct_dependency_evidence(manifest, package) {
-            add_signal(&mut signals, "tanstack-start", "framework", evidence);
-        }
-    }
+    frameworks::detect(manifest, &mut signals);
     for package in ["react", "vue", "svelte", "solid-js"] {
         if let Some(evidence) = direct_dependency_evidence(manifest, package) {
             add_signal(&mut signals, package, "ui", evidence);
@@ -575,12 +555,7 @@ fn classify_technologies(
     (technologies, vite, inertia)
 }
 
-fn add_signal(
-    signals: &mut BTreeMap<String, (String, BTreeSet<String>)>,
-    id: &str,
-    kind: &str,
-    evidence: String,
-) {
+fn add_signal(signals: &mut TechnologySignals, id: &str, kind: &str, evidence: String) {
     let entry = signals
         .entry(id.to_string())
         .or_insert_with(|| (kind.to_string(), BTreeSet::new()));

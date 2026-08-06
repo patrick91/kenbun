@@ -52,7 +52,10 @@ local scan with `follow_symlinks=False`.
   FastAPI's static entrypoint resolver is nested under its detector.
 - `ecosystems/node.rs` coordinates JavaScript/TypeScript discovery.
   `ecosystems/node/manifest.rs` and `ecosystems/node/workspace.rs` own manifest
-  and workspace parsing.
+  and workspace parsing. `ecosystems/node/frameworks/mod.rs` explicitly invokes
+  each primary-framework detector; package names and configuration-file
+  conventions live in one module per framework. UI frameworks, Vite, and
+  Inertia remain separate supporting technology classifiers.
 - `ecosystems/assembly.rs` is the only place that combines ecosystem facts
   into public `Application` values. It preserves same-directory enrichment and
   applies cross-ecosystem rules such as Cross Inertia.
