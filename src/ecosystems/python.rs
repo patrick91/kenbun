@@ -6,7 +6,7 @@
 
 use std::collections::BTreeSet;
 
-mod entrypoint;
+mod frameworks;
 pub(crate) mod manifest;
 mod norm;
 
@@ -14,19 +14,9 @@ use super::runtime;
 use crate::diag;
 use crate::fileset::FileSet;
 use crate::model::{
-    DeclaredDep, DependencySet, Diagnostic, Entrypoint, EnvVar, Evidence, PythonInfo, VersionPin,
+    DeclaredDep, DependencySet, Diagnostic, EnvVar, Evidence, PythonInfo, VersionPin,
 };
-use entrypoint::Resolution;
 use manifest::PyProject;
-
-#[derive(Clone, Debug)]
-pub(crate) struct DeployTarget {
-    pub framework: String,
-    pub entrypoint: Option<Entrypoint>,
-    pub confidence: String,
-    pub evidence: Vec<Evidence>,
-    pub diagnostics: Vec<Diagnostic>,
-}
 
 #[derive(Clone, Debug)]
 pub(crate) struct Project {
@@ -34,7 +24,7 @@ pub(crate) struct Project {
     pub name: Option<String>,
     pub is_python_project: bool,
     pub frameworks: Vec<String>,
-    pub deploy_targets: Vec<DeployTarget>,
+    pub deploy_targets: Vec<frameworks::DeployTarget>,
     pub dependencies: Option<DependencySet>,
     pub env_vars: Vec<EnvVar>,
     pub python: PythonInfo,
@@ -179,72 +169,23 @@ fn analyze_project(fs: &FileSet, dir: &str, entrypoint_hint: Option<&str>) -> Pr
         diagnostics.push(diag::kb306(&display_path, package_manager));
     }
 
-    let mut frameworks: Vec<String> = Vec::new();
-    let mut fastapi_groups: Vec<String> = Vec::new();
-    for dependency in &declared {
-        if let Some(framework) = manifest::framework_for(&dependency.name) {
-            if !frameworks.contains(&framework.to_string()) {
-                frameworks.push(framework.to_string());
-            }
-            evidence.push(Evidence {
-                kind: "dependency-declared".to_string(),
-                path: dependency.source.path.clone(),
-                span: None,
-                detail: format!("{} in `{}`", dependency.raw, dependency.group),
-            });
-            if framework == "fastapi" {
-                fastapi_groups.push(dependency.group.clone());
-            }
-        }
-    }
-
-    let manage_py = join(dir, "manage.py");
-    if fs.contains(&manage_py) {
-        if let Some(source) = fs.read_str(&manage_py) {
-            if source.contains("DJANGO_SETTINGS_MODULE")
-                && !frameworks.contains(&"django".to_string())
-            {
-                frameworks.push("django".to_string());
-                evidence.push(Evidence {
-                    kind: "marker-file".to_string(),
-                    path: manage_py,
-                    span: None,
-                    detail: "manage.py sets DJANGO_SETTINGS_MODULE".to_string(),
-                });
-            }
-        }
-    }
-    let setup_py = join(dir, "setup.py");
-    if fs.contains(&setup_py) {
-        if let Some(source) = fs.read_str(&setup_py) {
-            for name in manifest::setup_py_framework_mentions(&source) {
-                evidence.push(Evidence {
-                    kind: "marker-file".to_string(),
-                    path: setup_py.clone(),
-                    span: None,
-                    detail: format!("setup.py mentions {name} (string scan; not executed)"),
-                });
-            }
-        }
-    }
-    frameworks.sort();
-    if frameworks.len() > 1 {
-        diagnostics.push(diag::kb101(&display_path, &frameworks));
-    }
-
-    let installable = |group: &str| -> bool {
-        group == "project" || (package_manager == "uv" && matches!(group, "dev" | "group:dev"))
-    };
-    let fastapi_declared = !fastapi_groups.is_empty();
-    let fastapi_installable = fastapi_groups.iter().any(|group| installable(group));
-    let mut dependency_confidence_cap = false;
-    if fastapi_declared && !fastapi_installable {
-        dependency_confidence_cap = true;
-        for group in &fastapi_groups {
-            diagnostics.push(diag::kb301(&display_path, "fastapi", group));
-        }
-        diagnostics.push(diag::kb307(&display_path, "fastapi"));
-    }
+    let framework_detection = frameworks::detect(
+        fs,
+        dir,
+        &display_path,
+        &declared,
+        parsed.as_ref(),
+        package_manager,
+        entrypoint_hint,
+    );
+    let frameworks::Detection {
+        frameworks,
+        deploy_targets,
+        evidence: framework_evidence,
+        diagnostics: framework_diagnostics,
+    } = framework_detection;
+    evidence.extend(framework_evidence);
+    diagnostics.extend(framework_diagnostics);
 
     let requires_python = parsed
         .as_ref()
@@ -283,109 +224,6 @@ fn analyze_project(fs: &FileSet, dir: &str, entrypoint_hint: Option<&str>) -> Pr
             value: pin.value,
         })
         .collect();
-
-    let tool_entrypoint = parsed
-        .as_ref()
-        .and_then(|pyproject| pyproject.tool.as_ref())
-        .and_then(|tool| tool.fastapi.as_ref())
-        .and_then(|fastapi| fastapi.entrypoint.clone());
-    let should_resolve_entrypoint = !fs.is_virtual()
-        || fastapi_declared
-        || entrypoint_hint.is_some()
-        || tool_entrypoint.is_some();
-    if fastapi_declared {
-        fs.enable_script_hints();
-    }
-
-    let mut resolution: Option<Resolution> = None;
-    if should_resolve_entrypoint {
-        if let Some(hint) = entrypoint_hint {
-            allow_entrypoint_scripts(fs, dir, hint);
-            match entrypoint::validate_entrypoint(fs, dir, hint, "hint") {
-                Ok(value) => resolution = Some(value),
-                Err(errors) => diagnostics.extend(errors),
-            }
-        }
-    }
-    if should_resolve_entrypoint && resolution.is_none() {
-        if let Some(specification) = &tool_entrypoint {
-            allow_entrypoint_scripts(fs, dir, specification);
-            match entrypoint::validate_entrypoint(fs, dir, specification, "tool-fastapi") {
-                Ok(value) => resolution = Some(value),
-                Err(errors) => diagnostics.extend(errors),
-            }
-        }
-    }
-    let mut router_only = false;
-    if should_resolve_entrypoint && resolution.is_none() {
-        let scan = entrypoint::resolve_project(fs, dir);
-        diagnostics.extend(scan.diagnostics);
-        evidence.extend(scan.evidence);
-        router_only = scan.router_only;
-        let _ = scan.fastapi_import_seen;
-        resolution = scan.resolution;
-    }
-
-    let mut deploy_targets = Vec::new();
-    if let Some(resolution) = resolution {
-        let mut confidence_caps = 0;
-        if resolution.rule == 4 {
-            confidence_caps += 1;
-        }
-        if resolution.is_factory {
-            confidence_caps += 1;
-        }
-        if dependency_confidence_cap {
-            confidence_caps += 1;
-        }
-        let confidence = if !fastapi_declared {
-            "low"
-        } else if confidence_caps == 0 {
-            "high"
-        } else if confidence_caps == 1 {
-            "medium"
-        } else {
-            "low"
-        };
-        let source = match resolution.rule {
-            1 => "hint",
-            2 => "tool-fastapi",
-            _ => "inferred",
-        };
-        deploy_targets.push(DeployTarget {
-            framework: "fastapi".to_string(),
-            entrypoint: Some(Entrypoint {
-                kind: "asgi".to_string(),
-                module: resolution.module.clone(),
-                attribute: resolution.attribute.clone(),
-                is_factory: resolution.is_factory,
-                import_root: resolution.import_root.clone(),
-                source: source.to_string(),
-                as_string: format!("{}:{}", resolution.module, resolution.attribute),
-            }),
-            confidence: confidence.to_string(),
-            evidence: resolution.evidence,
-            diagnostics: resolution.diagnostics,
-        });
-    } else if fastapi_declared {
-        deploy_targets.push(DeployTarget {
-            framework: "fastapi".to_string(),
-            entrypoint: None,
-            confidence: if dependency_confidence_cap {
-                "low"
-            } else {
-                "medium"
-            }
-            .to_string(),
-            evidence: Vec::new(),
-            diagnostics: vec![diag::kb103(&display_path, "fastapi")],
-        });
-        if router_only {
-            diagnostics.push(diag::kb104(&display_path));
-        }
-    } else if router_only {
-        diagnostics.push(diag::kb104(&display_path));
-    }
 
     let name = parsed
         .as_ref()
@@ -427,31 +265,6 @@ fn analyze_project(fs: &FileSet, dir: &str, entrypoint_hint: Option<&str>) -> Pr
         },
         evidence,
         diagnostics,
-    }
-}
-
-fn allow_entrypoint_scripts(fs: &FileSet, project_dir: &str, specification: &str) {
-    let Some((module, _)) = specification.split_once(':') else {
-        return;
-    };
-    let module_path = module.replace('.', "/");
-    for root in ["", "src"] {
-        let base = match (
-            project_dir.is_empty() || project_dir == ".",
-            root.is_empty(),
-        ) {
-            (true, true) => String::new(),
-            (true, false) => root.to_string(),
-            (false, true) => project_dir.to_string(),
-            (false, false) => format!("{project_dir}/{root}"),
-        };
-        let prefix = if base.is_empty() {
-            String::new()
-        } else {
-            format!("{base}/")
-        };
-        fs.allow_script(format!("{prefix}{module_path}.py"));
-        fs.allow_script(format!("{prefix}{module_path}/__init__.py"));
     }
 }
 

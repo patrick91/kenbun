@@ -314,14 +314,17 @@ pub fn pipfile_deps(source: &str, path: &str) -> Vec<DeclaredDep> {
     out
 }
 
-/// setup.py string scan (no execution; quoted strings only). Returns
-/// normalized names of known frameworks mentioned in string literals.
-pub fn setup_py_framework_mentions(source: &str) -> Vec<String> {
+/// setup.py string scan (no execution; quoted strings only). Returns selected
+/// normalized requirement names mentioned in string literals.
+pub fn setup_py_requirement_mentions(
+    source: &str,
+    mut include: impl FnMut(&str) -> bool,
+) -> Vec<String> {
     let mut found = std::collections::BTreeSet::new();
     for quote in ['"', '\''] {
         for chunk in source.split(quote).skip(1).step_by(2) {
             if let Some((name, _, _)) = split_requirement(chunk) {
-                if framework_for(&name).is_some() {
+                if include(&name) {
                     found.insert(name);
                 }
             }
@@ -460,16 +463,6 @@ pub fn project_files(fs: &FileSet, dir: &str) -> ProjectFiles {
         manifests,
         requirements,
         inline_scripts,
-    }
-}
-
-/// Python framework identities: FastAPI resolved; Django/Flask identity-only.
-pub fn framework_for(name: &str) -> Option<&'static str> {
-    match name {
-        "fastapi" | "fastapi-slim" => Some("fastapi"),
-        "django" => Some("django"),
-        "flask" => Some("flask"),
-        _ => None,
     }
 }
 

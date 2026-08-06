@@ -45,9 +45,11 @@ local scan with `follow_symlinks=False`.
 - `ecosystems/` contains the concrete detectors and their shared
   reconciliation logic.
 - `ecosystems/python.rs` owns Python project discovery and Python-specific
-  candidate types. `ecosystems/python/manifest.rs` parses dependency metadata
-  and `ecosystems/python/entrypoint.rs` performs static FastAPI entrypoint
-  resolution.
+  candidate types. `ecosystems/python/manifest.rs` parses dependency metadata.
+  `ecosystems/python/frameworks/mod.rs` explicitly invokes each Python
+  framework detector and shares indexed dependency lookup between them.
+  Framework-specific identity and resolution live in one module per framework;
+  FastAPI's static entrypoint resolver is nested under its detector.
 - `ecosystems/node.rs` coordinates JavaScript/TypeScript discovery.
   `ecosystems/node/manifest.rs` and `ecosystems/node/workspace.rs` own manifest
   and workspace parsing.
@@ -78,6 +80,9 @@ local scan with `follow_symlinks=False`.
 - Cross-ecosystem rules belong in the assembler, not in either detector.
 - Public schema shape, canonical ordering, diagnostics, and remote file-request
   behavior must remain stable during internal refactors.
+- Framework detector calls are concrete and ordered. Adding a framework means
+  adding its module and an explicit call rather than registering dynamic
+  dispatch or repeatedly scanning the complete dependency list.
 
 ## Deliberate non-goals
 
