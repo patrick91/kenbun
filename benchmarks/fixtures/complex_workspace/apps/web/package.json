@@ -1,0 +1,7 @@
+{
+  "name": "web",
+  "private": true,
+  "scripts": {"build": "next build"},
+  "dependencies": {"next": "15.4.5", "react": "19.1.0"},
+  "devDependencies": {"typescript": "5.9.2"}
+}

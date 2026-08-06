@@ -1,0 +1,7 @@
+{
+  "name": "dashboard",
+  "private": true,
+  "scripts": {"build": "vite build"},
+  "dependencies": {"react": "19.1.0"},
+  "devDependencies": {"typescript": "5.9.2", "vite": "7.1.0"}
+}

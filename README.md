@@ -160,3 +160,18 @@ uv run ruff format --check .
 uv run pytest -q
 cargo deny check
 ```
+
+Run the in-memory analysis benchmarks locally with:
+
+```bash
+uv sync --group benchmark --no-install-project
+uv run --no-sync maturin develop --uv --release
+uv run --no-sync pytest --codspeed benchmarks/bench_analysis.py
+```
+
+The benchmark suite includes generated scale cases and committed fixture
+repositories. Fixture loading happens outside the measured call, so results
+track Kenbun's analysis work rather than disk I/O.
+
+Local runs validate the benchmark harness. The `CodSpeed` GitHub Actions
+workflow records comparable simulation results for pushes and pull requests.

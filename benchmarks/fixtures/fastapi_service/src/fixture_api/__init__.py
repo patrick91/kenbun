@@ -1,0 +1,1 @@
+"""Representative FastAPI service fixture."""
