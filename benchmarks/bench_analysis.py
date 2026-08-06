@@ -1,21 +1,37 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from pathlib import Path
+
+import pytest
 
 import kenbun
 
 FASTAPI_APP = b"from fastapi import FastAPI\napp = FastAPI()\n"
+FIXTURES = Path(__file__).parent / "fixtures"
+Repository = tuple[list[kenbun.FileEntry], dict[str, bytes]]
 
 
 def repository(
     contents: Mapping[str, bytes],
-) -> tuple[list[kenbun.FileEntry], dict[str, bytes]]:
+) -> Repository:
     ordered_contents = dict(sorted(contents.items()))
     files = [
         kenbun.FileEntry(path=path, size=len(source))
         for path, source in ordered_contents.items()
     ]
     return files, ordered_contents
+
+
+def repository_fixture(name: str) -> Repository:
+    root = FIXTURES / name
+    return repository(
+        {
+            path.relative_to(root).as_posix(): path.read_bytes()
+            for path in root.rglob("*")
+            if path.is_file()
+        }
+    )
 
 
 def framework_manifest(name: str, dependency: str) -> bytes:
@@ -69,6 +85,16 @@ FASTAPI_FALLBACK = repository(
 )
 
 
+@pytest.fixture(scope="session")
+def fastapi_service_fixture() -> Repository:
+    return repository_fixture("fastapi_service")
+
+
+@pytest.fixture(scope="session")
+def complex_workspace_fixture() -> Repository:
+    return repository_fixture("complex_workspace")
+
+
 def test_analyze_single_fastapi_application(benchmark) -> None:
     files, contents = SINGLE_FASTAPI
 
@@ -103,3 +129,55 @@ def test_analyze_fastapi_source_fallback(benchmark) -> None:
 
     assert len(result.applications) == 1
     assert result.applications[0].entrypoint.as_string == "package_zz.main:app"
+
+
+def test_analyze_fastapi_service_fixture(
+    benchmark,
+    fastapi_service_fixture: Repository,
+) -> None:
+    files, contents = fastapi_service_fixture
+
+    result = benchmark(kenbun.analyze, files, contents)
+
+    assert len(result.applications) == 1
+    assert result.applications[0].name == "fixture-api"
+    assert result.applications[0].entrypoint.as_string == "fixture_api.main:app"
+
+
+def test_analyze_complex_workspace_fixture(
+    benchmark,
+    complex_workspace_fixture: Repository,
+) -> None:
+    files, contents = complex_workspace_fixture
+
+    result = benchmark(kenbun.analyze, files, contents)
+
+    assert result.workspace.kind == "mixed"
+    assert result.workspace.members == [
+        ".",
+        "apps/dashboard",
+        "apps/docs",
+        "apps/web",
+        "packages/shared",
+        "packages/ui",
+        "services/admin",
+        "services/api",
+    ]
+    assert [application.application_dir for application in result.applications] == [
+        "apps/dashboard",
+        "apps/docs",
+        "apps/web",
+        "services/admin",
+        "services/api",
+        "services/legacy",
+    ]
+    api = next(
+        application
+        for application in result.applications
+        if application.application_dir == "services/api"
+    )
+    assert {technology.name for technology in api.technologies} >= {
+        "cross-inertia",
+        "fastapi",
+        "vite",
+    }

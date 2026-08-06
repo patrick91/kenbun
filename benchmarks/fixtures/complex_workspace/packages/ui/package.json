@@ -1,0 +1,6 @@
+{
+  "name": "@fixture/ui",
+  "private": true,
+  "dependencies": {"react": "19.1.0"},
+  "devDependencies": {"typescript": "5.9.2"}
+}

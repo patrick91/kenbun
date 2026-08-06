@@ -1,0 +1,7 @@
+{
+  "name": "platform-api-ui",
+  "private": true,
+  "scripts": {"build": "tsc && vite build"},
+  "dependencies": {"@inertiajs/react": "2.1.0", "react": "19.1.0"},
+  "devDependencies": {"typescript": "5.9.2", "vite": "7.1.0"}
+}
