@@ -1,4 +1,4 @@
-//! Static Python and FastAPI entrypoint resolution.
+//! Static FastAPI entrypoint resolution.
 //!
 //! Mirrors fastapi-cli's runtime discovery exactly, because production
 //! (`fastapi run`) IS fastapi-cli: same candidate file order, same
