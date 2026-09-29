@@ -873,7 +873,7 @@ def test_lfs_pointer_ignore_file_makes_the_local_scan_partial(tmp_path: Path) ->
 def test_unreadable_local_file_makes_the_scan_partial(tmp_path: Path) -> None:
     """Read failures, not just walk failures, have to reach completeness."""
     make(tmp_path, {"main.py": APP_MAIN})
-    (tmp_path / "pyproject.toml").write_bytes(b"\xff\xfe[project]\n")
+    (tmp_path / "pyproject.toml").write_bytes(b"\xc3\x28[project]\n")
 
     result = kenbun.scan(tmp_path)
 

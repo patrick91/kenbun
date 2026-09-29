@@ -34,7 +34,8 @@ filesystem; remote analysis populates it from an inventory and requested
 contents. Detectors must use `FileSet` rather than reading repository paths
 directly so both analysis modes retain the same behavior. Remote symlink
 entries are validated and removed before `FileSet` construction, matching a
-local scan with `follow_symlinks=False`.
+local scan with `follow_symlinks=False`. `FileSet` also owns text decoding,
+so byte order mark handling is identical for both modes.
 
 ## Module ownership
 
