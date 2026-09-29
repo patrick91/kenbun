@@ -119,6 +119,27 @@ struct VirtualSource {
     requests: Mutex<BTreeMap<String, FileRequest>>,
 }
 
+impl VirtualSource {
+    /// Whether `rel` may be requested: non-scripts and manifest-like scripts
+    /// always, other scripts only once allowed explicitly or by a hint.
+    fn may_request(&self, rel: &str) -> bool {
+        if !is_script(rel) || is_manifest_or_config_script(rel) {
+            return true;
+        }
+        let explicitly_allowed = self
+            .allowed_scripts
+            .lock()
+            .expect("lock poisoned")
+            .contains(rel);
+        let hint_allowed = self.script_hints_enabled.load(Ordering::Relaxed)
+            && self
+                .script_patterns
+                .iter()
+                .any(|pattern| pattern.matches(rel));
+        explicitly_allowed || hint_allowed
+    }
+}
+
 struct ScriptPattern {
     basename_only: bool,
     pattern: glob::Pattern,
@@ -202,6 +223,13 @@ impl FileSet {
 
     fn read_source(&self, rel: &str) -> Option<Vec<u8>> {
         let size = *self.files.get(rel)?;
+        if let FileSource::Virtual(source) = &self.source {
+            // A script that would never be requested is outside the analysis,
+            // so its size must not make the scan partial.
+            if !source.contents.contains_key(rel) && !source.may_request(rel) {
+                return None;
+            }
+        }
         let max_file_bytes = match &self.source {
             FileSource::Local => MAX_FILE_BYTES,
             FileSource::Virtual(source) => source.max_file_bytes,
@@ -227,23 +255,6 @@ impl FileSet {
                     None
                 }
                 None => {
-                    let explicitly_allowed = source
-                        .allowed_scripts
-                        .lock()
-                        .expect("lock poisoned")
-                        .contains(rel);
-                    let hint_allowed = source.script_hints_enabled.load(Ordering::Relaxed)
-                        && source
-                            .script_patterns
-                            .iter()
-                            .any(|pattern| pattern.matches(rel));
-                    if is_script(rel)
-                        && !is_manifest_or_config_script(rel)
-                        && !explicitly_allowed
-                        && !hint_allowed
-                    {
-                        return None;
-                    }
                     source
                         .requests
                         .lock()

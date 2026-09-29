@@ -125,7 +125,9 @@ affect completeness or file budgets. Any supplied link-target contents are
 ignored. This matches local scans with `follow_symlinks=False`.
 
 Kenbun treats entries known to exceed `max_file_bytes` as unavailable without
-requesting their contents. Unknown sizes remain requestable. Transport metadata
+requesting their contents. Scripts that would not be requested (no hint,
+configuration reference, or manifest role) are outside the analysis, so their
+size never affects `completeness`. Unknown sizes remain requestable. Transport metadata
 such as blob identifiers belongs to the caller. A path omitted from `contents`
 has not been fetched. `None` means the caller cannot provide the content and
 prevents that path from being requested again. `max_files` bounds how many

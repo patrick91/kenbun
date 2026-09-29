@@ -352,3 +352,34 @@ def test_bom_prefixed_requirements_detect_the_application(requirements: bytes) -
     assert [
         technology.name for technology in analysis.result.applications[0].technologies
     ] == ["fastapi", "python"]
+
+
+@pytest.mark.parametrize(
+    ("oversized", "completeness"),
+    [
+        # Never requested, so it is outside the analysis whatever its size.
+        pytest.param("pages.py", "complete", id="unrequested-root-script"),
+        # Needed for the analysis, so skipping it must still be reported.
+        pytest.param("main.py", "partial", id="hinted-script"),
+        pytest.param("requirements.txt", "partial", id="manifest"),
+    ],
+)
+def test_oversized_files_affect_completeness_only_when_needed(
+    oversized: str, completeness: str
+) -> None:
+    contents = {"requirements.txt": b"fastapi\n", "main.py": FASTAPI_APP}
+    sizes = {path: len(content) for path, content in contents.items()}
+    sizes["pages.py"] = 64
+    sizes[oversized] = 2_048
+    analysis = kenbun.remote_analysis(
+        [entry(path, size=size) for path, size in sizes.items()],
+        hints={"script_patterns": ["main.py"]},
+        max_file_bytes=1_024,
+    )
+
+    while analysis.file_requests:
+        analysis.update(
+            {request.path: contents[request.path] for request in analysis.file_requests}
+        )
+
+    assert analysis.result.completeness == completeness
