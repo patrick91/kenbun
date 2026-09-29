@@ -45,11 +45,11 @@ fn decode_text(bytes: Vec<u8>) -> Option<String> {
 }
 
 fn decode_utf16(bytes: &[u8], unit: fn([u8; 2]) -> u16) -> Option<String> {
-    let chunks = bytes.chunks_exact(2);
-    if !chunks.remainder().is_empty() {
+    let (pairs, remainder) = bytes.as_chunks::<2>();
+    if !remainder.is_empty() {
         return None;
     }
-    char::decode_utf16(chunks.map(|pair| unit([pair[0], pair[1]])))
+    char::decode_utf16(pairs.iter().map(|&pair| unit(pair)))
         .collect::<Result<String, _>>()
         .ok()
 }
