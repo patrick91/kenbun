@@ -100,6 +100,9 @@ pub struct FileSet {
     /// Set when a read could not yield usable content. Tracked for both sources
     /// so local and virtual scans report completeness the same way.
     unavailable: AtomicBool,
+    /// Paths whose reads failed, with the first reason seen, so a partial
+    /// result can say which file it is missing.
+    unreadable: Mutex<BTreeMap<String, String>>,
     source: FileSource,
 }
 
@@ -159,6 +162,7 @@ impl FileSet {
             truncated: false,
             issues: Vec::new(),
             unavailable: AtomicBool::new(false),
+            unreadable: Mutex::new(BTreeMap::new()),
             source: FileSource::Local,
         }
     }
@@ -215,7 +219,7 @@ impl FileSet {
         // pointer's, so it slips past every cap; parsing it as the real file
         // invents facts about the repository.
         if is_lfs_pointer(&bytes) {
-            self.mark_unavailable();
+            self.mark_unreadable(rel, "file is a Git LFS pointer".to_string());
             return None;
         }
         Some(bytes)
@@ -235,14 +239,20 @@ impl FileSet {
             FileSource::Virtual(source) => source.max_file_bytes,
         };
         if size > max_file_bytes {
-            self.mark_unavailable();
+            self.mark_unreadable(rel, exceeds_parse_cap(max_file_bytes));
             return None;
         }
         match &self.source {
             FileSource::Local => {
                 let bytes = read_bounded_bytes(&self.root.join(rel));
                 if bytes.is_none() {
-                    self.mark_unavailable();
+                    self.mark_unreadable(
+                        rel,
+                        format!(
+                            "file could not be read or {}",
+                            exceeds_parse_cap(max_file_bytes)
+                        ),
+                    );
                 }
                 bytes
             }
@@ -250,8 +260,12 @@ impl FileSet {
                 Some(Some(bytes)) if bytes.len() as u64 <= source.max_file_bytes => {
                     Some(bytes.clone())
                 }
-                Some(_) => {
-                    self.mark_unavailable();
+                Some(Some(_)) => {
+                    self.mark_unreadable(rel, exceeds_parse_cap(source.max_file_bytes));
+                    None
+                }
+                Some(None) => {
+                    self.mark_unreadable(rel, "file content was not provided".to_string());
                     None
                 }
                 None => {
@@ -277,7 +291,10 @@ impl FileSet {
     pub fn read_str(&self, rel: &str) -> Option<String> {
         let source = decode_text(self.read(rel)?);
         if source.is_none() {
-            self.mark_unavailable();
+            self.mark_unreadable(
+                rel,
+                "file is not UTF-8 or BOM-marked UTF-16 text".to_string(),
+            );
         }
         source
     }
@@ -331,6 +348,16 @@ impl FileSet {
         matches!(&self.source, FileSource::Virtual(source) if source.requests.lock().expect("lock poisoned").contains_key(rel))
     }
 
+    /// Failed reads as `(path, reason)`, in path order.
+    pub fn unreadable(&self) -> Vec<(String, String)> {
+        self.unreadable
+            .lock()
+            .expect("lock poisoned")
+            .iter()
+            .map(|(path, reason)| (path.clone(), reason.clone()))
+            .collect()
+    }
+
     pub fn unavailable_seen(&self) -> bool {
         self.unavailable.load(Ordering::Relaxed)
             || matches!(&self.source, FileSource::Local) && !self.issues.is_empty()
@@ -378,6 +405,19 @@ impl FileSet {
     fn mark_unavailable(&self) {
         self.unavailable.store(true, Ordering::Relaxed);
     }
+
+    fn mark_unreadable(&self, rel: &str, reason: String) {
+        self.mark_unavailable();
+        self.unreadable
+            .lock()
+            .expect("lock poisoned")
+            .entry(rel.to_string())
+            .or_insert(reason);
+    }
+}
+
+fn exceeds_parse_cap(max_file_bytes: u64) -> String {
+    format!("file exceeds the {max_file_bytes}-byte parse cap")
 }
 
 impl ScriptPattern {
@@ -608,6 +648,7 @@ pub fn virtual_files(
         truncated: false,
         issues,
         unavailable: AtomicBool::new(unavailable_seen),
+        unreadable: Mutex::new(BTreeMap::new()),
         source: FileSource::Virtual(VirtualSource {
             contents,
             max_files,
@@ -698,6 +739,7 @@ pub fn walk_fs(
             truncated,
             issues,
             unavailable: AtomicBool::new(false),
+            unreadable: Mutex::new(BTreeMap::new()),
             source: FileSource::Local,
         };
     }
@@ -813,6 +855,7 @@ pub fn walk_fs(
         truncated,
         issues,
         unavailable: AtomicBool::new(unavailable_seen),
+        unreadable: Mutex::new(BTreeMap::new()),
         source: FileSource::Local,
     }
 }

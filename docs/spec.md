@@ -442,6 +442,12 @@ Repository text is decoded as UTF-8. A leading UTF-8, UTF-16LE, or UTF-16BE
 byte order mark selects that encoding and is not part of the text. Content that
 cannot be decoded is unavailable and reported as `KB801`.
 
+A file the analysis needs but cannot use makes the result `partial`: it exceeds
+the parse cap, is a Git LFS pointer, cannot be decoded, or its content was not
+provided. Each such file is reported as `KB801` with its path, unless another
+diagnostic already names that path, so a partial result always identifies what
+it is missing.
+
 Applications sort by `application_dir`. Technologies, dependency metadata,
 workspace members, evidence, and diagnostics use stable semantic or bytewise
 orders. Filesystem enumeration order must not affect output. Serialization is

@@ -196,6 +196,16 @@ fn scan_fileset(
     for application in &applications {
         diagnostics.extend(application.diagnostics.iter().cloned());
     }
+    // A failed read makes the result partial, so it must be explained even when
+    // no detector reported that file itself.
+    for (path, reason) in fs.unreadable() {
+        if !diagnostics
+            .iter()
+            .any(|diagnostic| diagnostic.path.as_deref() == Some(path.as_str()))
+        {
+            diagnostics.push(diag::kb801(&path, &reason));
+        }
+    }
     diag::sort_and_dedup(&mut diagnostics);
 
     if applications.is_empty() {

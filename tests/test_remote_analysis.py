@@ -354,21 +354,44 @@ def test_bom_prefixed_requirements_detect_the_application(requirements: bytes) -
     ] == ["fastapi", "python"]
 
 
+def drive(
+    analysis: kenbun.RemoteAnalysis, contents: dict[str, bytes | None]
+) -> kenbun.ScanResult:
+    while analysis.file_requests:
+        analysis.update(
+            {request.path: contents[request.path] for request in analysis.file_requests}
+        )
+    return analysis.result
+
+
+def omitted(result: kenbun.ScanResult) -> list[str | None]:
+    return [
+        diagnostic.path
+        for diagnostic in result.diagnostics
+        if diagnostic.code == "KB801"
+    ]
+
+
 @pytest.mark.parametrize(
-    ("oversized", "completeness"),
+    ("oversized", "completeness", "reported"),
     [
         # Never requested, so it is outside the analysis whatever its size.
-        pytest.param("pages.py", "complete", id="unrequested-root-script"),
+        pytest.param("pages.py", "complete", [], id="unrequested-root-script"),
         # Needed for the analysis, so skipping it must still be reported.
-        pytest.param("main.py", "partial", id="hinted-script"),
-        pytest.param("requirements.txt", "partial", id="manifest"),
+        pytest.param("main.py", "partial", ["main.py"], id="hinted-script"),
+        pytest.param(
+            "requirements.txt", "partial", ["requirements.txt"], id="manifest"
+        ),
     ],
 )
 def test_oversized_files_affect_completeness_only_when_needed(
-    oversized: str, completeness: str
+    oversized: str, completeness: str, reported: list[str]
 ) -> None:
-    contents = {"requirements.txt": b"fastapi\n", "main.py": FASTAPI_APP}
-    sizes = {path: len(content) for path, content in contents.items()}
+    contents: dict[str, bytes | None] = {
+        "requirements.txt": b"fastapi\n",
+        "main.py": FASTAPI_APP,
+    }
+    sizes = {path: len(content or b"") for path, content in contents.items()}
     sizes["pages.py"] = 64
     sizes[oversized] = 2_048
     analysis = kenbun.remote_analysis(
@@ -377,9 +400,40 @@ def test_oversized_files_affect_completeness_only_when_needed(
         max_file_bytes=1_024,
     )
 
-    while analysis.file_requests:
-        analysis.update(
-            {request.path: contents[request.path] for request in analysis.file_requests}
-        )
+    result = drive(analysis, contents)
 
-    assert analysis.result.completeness == completeness
+    assert result.completeness == completeness
+    assert omitted(result) == reported
+
+
+@pytest.mark.parametrize(
+    ("requirements", "reason"),
+    [
+        pytest.param(None, "not provided", id="unavailable"),
+        pytest.param(LFS_POINTER, "Git LFS pointer", id="lfs-pointer"),
+        pytest.param(b"\xc3\x28fastapi\n", "not UTF-8", id="undecodable"),
+    ],
+)
+def test_every_unusable_read_is_reported(
+    requirements: bytes | None, reason: str
+) -> None:
+    """A partial result always names the file it could not use."""
+    analysis = kenbun.remote_analysis([entry("requirements.txt")])
+
+    result = drive(analysis, {"requirements.txt": requirements})
+
+    assert result.completeness == "partial"
+    [diagnostic] = [d for d in result.diagnostics if d.code == "KB801"]
+    assert diagnostic.path == "requirements.txt"
+    assert reason in diagnostic.message
+
+
+def test_a_read_failure_already_reported_by_a_detector_is_not_repeated() -> None:
+    analysis = kenbun.remote_analysis(
+        [entry("pyproject.toml", size=2_048)], max_file_bytes=1_024
+    )
+
+    result = drive(analysis, {})
+
+    assert result.completeness == "partial"
+    assert omitted(result) == ["pyproject.toml"]
