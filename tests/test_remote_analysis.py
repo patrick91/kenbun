@@ -437,3 +437,25 @@ def test_a_read_failure_already_reported_by_a_detector_is_not_repeated() -> None
 
     assert result.completeness == "partial"
     assert omitted(result) == ["pyproject.toml"]
+
+
+def test_pnpm_settings_only_workspace_file_keeps_the_scan_complete() -> None:
+    contents: dict[str, bytes | None] = {
+        "package.json": b'{"dependencies": {"next": "16", "react": "19"}}',
+        "pnpm-workspace.yaml": b"onlyBuiltDependencies:\n  - sharp\n",
+        "backend/requirements.txt": b"fastapi\n",
+        "backend/main.py": FASTAPI_APP,
+    }
+    analysis = kenbun.remote_analysis(
+        [entry(path, size=len(content or b"")) for path, content in contents.items()],
+        hints={"script_patterns": ["main.py"]},
+    )
+
+    result = drive(analysis, contents)
+
+    assert result.completeness == "complete"
+    assert result.diagnostics == []
+    assert [application.application_dir for application in result.applications] == [
+        ".",
+        "backend",
+    ]

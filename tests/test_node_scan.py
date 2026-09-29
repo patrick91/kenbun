@@ -771,3 +771,24 @@ def test_nearest_node_tool_version_wins(tmp_path: Path) -> None:
     assert [(pin.source, pin.value) for pin in pins] == [
         ("apps/site/.tool-versions", "22.14.0")
     ]
+
+
+def test_pnpm_settings_only_workspace_file_is_not_an_error(tmp_path: Path) -> None:
+    """pnpm 10 writes settings such as `onlyBuiltDependencies` to
+    `pnpm-workspace.yaml` even without workspace packages."""
+    make(
+        tmp_path,
+        {
+            "package.json": package(
+                dependencies={"next": "16", "react": "19"},
+                scripts={"build": "next build"},
+                package_manager=None,
+            ),
+            "pnpm-workspace.yaml": "onlyBuiltDependencies:\n  - sharp\n",
+        },
+    )
+    result = kenbun.scan(tmp_path)
+    assert result.diagnostics == []
+    assert result.workspace.kind == "pnpm"
+    assert result.workspace.members == ["."]
+    assert app(result, ".").dependencies[0].package_manager == "pnpm"

@@ -384,7 +384,8 @@ Kenbun recognizes:
 - uv workspaces from `[tool.uv.workspace]`.
 - npm, Yarn, and Bun workspaces from `package.json` workspace declarations,
   using an explicit `packageManager` when present.
-- pnpm workspaces from `pnpm-workspace.yaml`.
+- pnpm workspaces from `pnpm-workspace.yaml`. A file without `packages`, such as
+  one holding only pnpm 10 settings, declares no members and is not an error.
 
 Members are expanded deterministically and recorded in `Workspace.members`.
 A workspace root without its own detected application has `virtual_root=True`.

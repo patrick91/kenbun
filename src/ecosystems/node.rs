@@ -738,6 +738,14 @@ catalog:
     }
 
     #[test]
+    fn pnpm_workspace_yaml_without_packages_declares_no_members() {
+        let (patterns, errors) =
+            parse_pnpm_workspace_yaml("onlyBuiltDependencies:\n  - sharp\n  - esbuild\n");
+        assert!(errors.is_empty());
+        assert!(patterns.is_empty());
+    }
+
+    #[test]
     fn workspace_expansion_is_sorted_and_exclusions_win() {
         let patterns = vec![
             "packages/**".to_string(),
