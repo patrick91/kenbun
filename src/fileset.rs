@@ -22,7 +22,36 @@ fn is_lfs_pointer(bytes: &[u8]) -> bool {
 }
 
 pub fn read_bounded_path(path: &Path) -> Option<String> {
-    String::from_utf8(read_bounded_bytes(path)?).ok()
+    decode_text(read_bounded_bytes(path)?)
+}
+
+/// Decodes repository text as UTF-8, honoring a leading byte order mark.
+///
+/// Windows tooling commonly writes BOM-prefixed files: PowerShell redirection
+/// (`pip freeze > requirements.txt`) produces UTF-16LE and many editors add a
+/// UTF-8 BOM. Without a BOM, content must be valid UTF-8.
+fn decode_text(bytes: Vec<u8>) -> Option<String> {
+    if let Some(units) = bytes.strip_prefix(b"\xFF\xFE") {
+        return decode_utf16(units, u16::from_le_bytes);
+    }
+    if let Some(units) = bytes.strip_prefix(b"\xFE\xFF") {
+        return decode_utf16(units, u16::from_be_bytes);
+    }
+    let text = String::from_utf8(bytes).ok()?;
+    Some(match text.strip_prefix('\u{FEFF}') {
+        Some(rest) => rest.to_string(),
+        None => text,
+    })
+}
+
+fn decode_utf16(bytes: &[u8], unit: fn([u8; 2]) -> u16) -> Option<String> {
+    let (pairs, remainder) = bytes.as_chunks::<2>();
+    if !remainder.is_empty() {
+        return None;
+    }
+    char::decode_utf16(pairs.iter().map(|&pair| unit(pair)))
+        .collect::<Result<String, _>>()
+        .ok()
 }
 
 fn read_bounded_bytes(path: &Path) -> Option<Vec<u8>> {
@@ -235,13 +264,11 @@ impl FileSet {
     }
 
     pub fn read_str(&self, rel: &str) -> Option<String> {
-        match String::from_utf8(self.read(rel)?) {
-            Ok(source) => Some(source),
-            Err(_) => {
-                self.mark_unavailable();
-                None
-            }
+        let source = decode_text(self.read(rel)?);
+        if source.is_none() {
+            self.mark_unavailable();
         }
+        source
     }
 
     pub fn allow_script(&self, rel: String) {
@@ -797,6 +824,41 @@ mod tests {
             max_depth,
         )
         .expect("inventory is valid")
+    }
+
+    #[test]
+    fn decode_text_honors_byte_order_marks() {
+        let utf16 = |text: &str, bom: [u8; 2], unit: fn(u16) -> [u8; 2]| {
+            let mut bytes = bom.to_vec();
+            bytes.extend(text.encode_utf16().flat_map(unit));
+            bytes
+        };
+
+        assert_eq!(
+            decode_text(b"fastapi\n".to_vec()).as_deref(),
+            Some("fastapi\n")
+        );
+        assert_eq!(
+            decode_text(b"\xEF\xBB\xBFfastapi\n".to_vec()).as_deref(),
+            Some("fastapi\n")
+        );
+        assert_eq!(
+            decode_text(utf16("fastapi\r\n", [0xFF, 0xFE], u16::to_le_bytes)).as_deref(),
+            Some("fastapi\r\n")
+        );
+        assert_eq!(
+            decode_text(utf16("fastapi\r\n", [0xFE, 0xFF], u16::to_be_bytes)).as_deref(),
+            Some("fastapi\r\n")
+        );
+    }
+
+    #[test]
+    fn decode_text_rejects_malformed_text() {
+        // An odd number of UTF-16 bytes.
+        assert_eq!(decode_text(b"\xFF\xFEf".to_vec()), None);
+        // An unpaired surrogate.
+        assert_eq!(decode_text(b"\xFF\xFE\x00\xD8".to_vec()), None);
+        assert_eq!(decode_text(b"\xC3\x28".to_vec()), None);
     }
 
     #[test]

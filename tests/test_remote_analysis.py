@@ -326,3 +326,29 @@ def test_real_content_still_completes() -> None:
     analysis.update({"pyproject.toml": FASTAPI_MANIFEST})
 
     assert analysis.result.completeness == "complete"
+
+
+@pytest.mark.parametrize(
+    "requirements",
+    [
+        pytest.param(b"\xef\xbb\xbffastapi\r\nuvicorn\r\n", id="utf-8-bom"),
+        # PowerShell's `pip freeze > requirements.txt` writes UTF-16LE with a BOM.
+        pytest.param("fastapi\r\nuvicorn\r\n".encode("utf-16"), id="utf-16"),
+    ],
+)
+def test_bom_prefixed_requirements_detect_the_application(requirements: bytes) -> None:
+    contents = {"requirements.txt": requirements, "main.py": FASTAPI_APP}
+    analysis = kenbun.remote_analysis(
+        [entry("requirements.txt"), entry("main.py")],
+        hints={"script_patterns": ["main.py"]},
+    )
+
+    while analysis.file_requests:
+        analysis.update(
+            {request.path: contents[request.path] for request in analysis.file_requests}
+        )
+
+    assert analysis.result.completeness == "complete"
+    assert [
+        technology.name for technology in analysis.result.applications[0].technologies
+    ] == ["fastapi", "python"]

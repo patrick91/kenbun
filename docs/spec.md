@@ -436,6 +436,10 @@ presentation facts. Application diagnostics are also aggregated onto
 - version conflicts: `KB700`;
 - filesystem and scan limits: `KB800`, `KB801`, `KB802`.
 
+Repository text is decoded as UTF-8. A leading UTF-8, UTF-16LE, or UTF-16BE
+byte order mark selects that encoding and is not part of the text. Content that
+cannot be decoded is unavailable and reported as `KB801`.
+
 Applications sort by `application_dir`. Technologies, dependency metadata,
 workspace members, evidence, and diagnostics use stable semantic or bytewise
 orders. Filesystem enumeration order must not affect output. Serialization is
