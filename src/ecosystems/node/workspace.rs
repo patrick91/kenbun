@@ -62,7 +62,9 @@ pub(super) fn package_workspace_patterns(
 }
 
 /// Parse only the root `packages` sequence used by pnpm. Unsupported YAML
-/// constructs become errors rather than being guessed or evaluated.
+/// constructs become errors rather than being guessed or evaluated. A file
+/// without `packages` declares no members: pnpm 10 writes settings such as
+/// `onlyBuiltDependencies` there even for single-package repositories.
 pub(crate) fn parse_pnpm_workspace_yaml(source: &str) -> (Vec<String>, Vec<String>) {
     let mut patterns = Vec::new();
     let mut errors = Vec::new();
@@ -126,9 +128,6 @@ pub(crate) fn parse_pnpm_workspace_yaml(source: &str) -> (Vec<String>, Vec<Strin
         }
     }
 
-    if !saw_packages {
-        errors.push("missing root `packages` key".to_string());
-    }
     patterns.sort();
     patterns.dedup();
     (patterns, errors)
