@@ -1,3 +1,13 @@
+0.9.6 - 2026-09-29
+------------------
+
+This release accepts `pnpm-workspace.yaml` files that only hold pnpm settings.
+
+- pnpm 10 writes settings such as `onlyBuiltDependencies` to
+  `pnpm-workspace.yaml` even in repositories without workspace packages. A
+  file without `packages` now declares no members, like `packages: ["."]`,
+  instead of reporting `KB203` and making remote results `partial`.
+
 0.9.5 - 2026-09-29
 ------------------
 
