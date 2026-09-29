@@ -125,7 +125,9 @@ affect completeness or file budgets. Any supplied link-target contents are
 ignored. This matches local scans with `follow_symlinks=False`.
 
 Kenbun treats entries known to exceed `max_file_bytes` as unavailable without
-requesting their contents. Unknown sizes remain requestable. Transport metadata
+requesting their contents. Scripts that would not be requested (no hint,
+configuration reference, or manifest role) are outside the analysis, so their
+size never affects `completeness`. Unknown sizes remain requestable. Transport metadata
 such as blob identifiers belongs to the caller. A path omitted from `contents`
 has not been fetched. `None` means the caller cannot provide the content and
 prevents that path from being requested again. `max_files` bounds how many
@@ -439,6 +441,12 @@ presentation facts. Application diagnostics are also aggregated onto
 Repository text is decoded as UTF-8. A leading UTF-8, UTF-16LE, or UTF-16BE
 byte order mark selects that encoding and is not part of the text. Content that
 cannot be decoded is unavailable and reported as `KB801`.
+
+A file the analysis needs but cannot use makes the result `partial`: it exceeds
+the parse cap, is a Git LFS pointer, cannot be decoded, or its content was not
+provided. Each such file is reported as `KB801` with its path, unless another
+diagnostic already names that path, so a partial result always identifies what
+it is missing.
 
 Applications sort by `application_dir`. Technologies, dependency metadata,
 workspace members, evidence, and diagnostics use stable semantic or bytewise
